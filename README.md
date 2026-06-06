@@ -46,6 +46,20 @@ This MCP server is the foundation for that.
 
 ---
 
+## How This Differs From Other Clover MCP Servers
+
+There are other MCP servers that wrap the 🍀 Clover API — and they're well built. But most of them are designed for **developers**: raw CRUD tools that expose every API endpoint so engineers can build on top of them.
+
+This one is designed for **restaurant owners**.
+
+The difference is in what the tools actually do. Instead of `clover_update_item_stock`, you get `adjust_inventory` — which validates your adjustment, guards against negative stock, and tells you what changed in plain language. Instead of a generic orders list, you get `get_lapsed_customers` — which surfaces your regulars who haven't been back in 30 days and drafts a win-back message for them.
+
+Other servers give an AI the ability to talk to 🍀 Clover. This one gives an AI the ability to help run a restaurant.
+
+That's the difference.
+
+---
+
 ## Getting Started
 
 ### Prerequisites
