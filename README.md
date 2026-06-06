@@ -58,7 +58,7 @@ The difference is in what the tools actually do. Instead of `clover_update_item_
 
 Other servers give an AI the ability to talk to 🍀 Clover. This one gives an AI the ability to help run a restaurant.
 
-That's the difference.
+That's the Dokdo 🍀 Clover difference.
 
 ---
 
