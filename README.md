@@ -88,7 +88,7 @@ Opens the [MCP Inspector](https://github.com/modelcontextprotocol/inspector) —
 
 ---
 
-## Two-Store Setup
+## Multi-Store Setup
 
 Each 🍀 Clover location has its own merchant ID and API token. Run one instance per store:
 
