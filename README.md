@@ -1,4 +1,4 @@
-# clover-mcp-server
+# Lucky – Clover MCP Server 🍀
 
 **A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for [🍀 Clover POS](https://www.clover.com) — giving AI agents direct access to restaurant operations: menu management, orders, inventory, analytics, customer retention, financial reporting, and more.**
 
