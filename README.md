@@ -2,7 +2,7 @@
 
 **A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for [🍀 Clover POS](https://www.clover.com) — giving AI agents direct access to restaurant operations: menu management, orders, inventory, analytics, customer retention, financial reporting, and more.**
 
-Connect any MCP-compatible AI (Claude, GPT-4, Cursor, Continue, OpenClaw, and others) to your Clover merchant account and turn natural language into real POS actions — no dashboard, no manual lookups, no custom integration code.
+Connect any MCP-compatible AI (Claude, GPT-4, Cursor, Continue, and others) to your Clover merchant account and turn natural language into real POS actions — no dashboard, no manual lookups, no custom integration code.
 
 This project was born out of a simple idea: restaurant owners — especially family-run, immigrant-owned restaurants — deserve the same kind of intelligent assistant that enterprise businesses take for granted. Not a chatbot. Not a dashboard. Something that watches your inventory, knows your regulars, and has your back during a dinner rush.
 
