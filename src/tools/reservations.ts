@@ -1,12 +1,15 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { CloverClient } from "../clover-client.js";
+import { tool } from "../tool-wrapper.js";
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import { randomUUID } from "crypto";
 import { join } from "path";
 
-// Clover has no native reservations — we store them in a local JSON file
-// In production this would be a proper database
+const CLOVER_ID = z.string().regex(/^[A-Z0-9]+$/i, "must be alphanumeric").max(40);
+
+// Clover has no native reservations — stored in a local JSON file.
+// In production this would be a proper database.
 const RESERVATIONS_FILE = join(process.env.RESERVATIONS_PATH ?? ".", "reservations.json");
 
 interface Reservation {
@@ -33,17 +36,18 @@ function saveReservations(data: Reservation[]) {
 
 export function registerReservationTools(server: McpServer, clover: CloverClient) {
 
-  server.tool(
+  tool(
+    server,
     "create_reservation",
     "Book a table reservation. Stores locally and optionally links to a Clover customer record.",
     {
-      customerName: z.string(),
-      partySize: z.number().describe("Number of guests"),
-      date: z.string().describe("Reservation date e.g. 2026-06-10"),
-      time: z.string().describe("Reservation time e.g. 7:00 PM"),
-      phone: z.string().optional(),
-      notes: z.string().optional().describe("Special requests, allergies, occasion, etc."),
-      customerId: z.string().optional().describe("Link to existing Clover customer ID if known"),
+      customerName: z.string().min(1).max(200),
+      partySize: z.number().int().positive().max(500).describe("Number of guests"),
+      date: z.string().max(20).describe("Reservation date e.g. 2026-06-10"),
+      time: z.string().max(20).describe("Reservation time e.g. 7:00 PM"),
+      phone: z.string().max(50).optional(),
+      notes: z.string().max(1000).optional().describe("Special requests, allergies, occasion, etc."),
+      customerId: CLOVER_ID.optional().describe("Link to existing Clover customer ID if known"),
     },
     async ({ customerName, partySize, date, time, phone, notes, customerId }) => {
       const reservations = loadReservations();
@@ -65,7 +69,6 @@ export function registerReservationTools(server: McpServer, clover: CloverClient
       reservations.push(reservation);
       saveReservations(reservations);
 
-      // If we have a Clover customer ID, add a note to their profile
       if (customerId) {
         const customer = await clover.get<any>(clover.v3(`/customers/${customerId}`));
         const existingNote = customer.note ?? "";
@@ -88,11 +91,12 @@ export function registerReservationTools(server: McpServer, clover: CloverClient
     }
   );
 
-  server.tool(
+  tool(
+    server,
     "get_reservations",
     "Get all reservations for a specific date or date range.",
     {
-      date: z.string().optional().describe("ISO date string e.g. 2026-06-10. Defaults to today."),
+      date: z.string().max(20).optional().describe("ISO date string e.g. 2026-06-10. Defaults to today."),
       status: z.enum(["all", "confirmed", "cancelled", "seated", "no-show"]).optional().default("confirmed"),
     },
     async ({ date, status }) => {
@@ -114,13 +118,14 @@ export function registerReservationTools(server: McpServer, clover: CloverClient
     }
   );
 
-  server.tool(
+  tool(
+    server,
     "update_reservation_status",
     "Update a reservation status: confirm, seat, mark no-show, or cancel.",
     {
-      reservationId: z.string(),
+      reservationId: z.string().min(1).max(60),
       status: z.enum(["confirmed", "seated", "no-show", "cancelled"]),
-      notes: z.string().optional().describe("Optional note to append"),
+      notes: z.string().max(500).optional().describe("Optional note to append"),
     },
     async ({ reservationId, status, notes }) => {
       const reservations = loadReservations();
@@ -147,11 +152,12 @@ export function registerReservationTools(server: McpServer, clover: CloverClient
     }
   );
 
-  server.tool(
+  tool(
+    server,
     "get_reservation_summary",
     "Overview of upcoming reservations: total covers, busiest time slots, special requests.",
     {
-      date: z.string().optional().describe("ISO date string. Defaults to today."),
+      date: z.string().max(20).optional().describe("ISO date string. Defaults to today."),
     },
     async ({ date }) => {
       const targetDate = date ?? new Date().toISOString().split("T")[0];

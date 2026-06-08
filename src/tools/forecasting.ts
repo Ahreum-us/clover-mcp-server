@@ -1,37 +1,40 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { CloverClient } from "../clover-client.js";
+import { tool } from "../tool-wrapper.js";
+import { parseDate } from "../lib/date.js";
 
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 export function registerForecastingTools(server: McpServer, clover: CloverClient) {
 
-  server.tool(
+  tool(
+    server,
     "predict_busy_periods",
     "Analyze 90 days of historical data to predict busy days and peak hours for the coming week.",
     {},
     async () => {
       const ninetyDaysAgo = Date.now() - 90 * 24 * 60 * 60 * 1000;
 
-      const orders = await clover.get<any>(clover.v3("/orders"), {
+      // Migrated to getAll — 90 days of orders at a busy spot can easily
+      // exceed 1000 records and the old get(limit:1000) silently truncated.
+      const orders = await clover.getAll(clover.v3("/orders"), {
         filter: [`createdTime>=${ninetyDaysAgo}`, "paymentState=PAID"],
-        limit: 1000,
       });
 
-      // Build day-of-week and hour averages
       const byDow: Record<number, { orders: number; revenueCents: number; weeks: Set<string> }> = {};
       const byHour: Record<number, { orders: number; count: number }> = {};
       for (let i = 0; i < 7; i++) byDow[i] = { orders: 0, revenueCents: 0, weeks: new Set() };
       for (let i = 0; i < 24; i++) byHour[i] = { orders: 0, count: 0 };
 
-      for (const order of orders.elements ?? []) {
-        const d = new Date(order.createdTime);
+      for (const order of orders) {
+        const d = new Date((order as any).createdTime);
         const dow = d.getDay();
         const hour = d.getHours();
         const weekKey = `${Math.floor(d.getTime() / (7 * 24 * 60 * 60 * 1000))}`;
 
         byDow[dow].orders++;
-        byDow[dow].revenueCents += order.total ?? 0;
+        byDow[dow].revenueCents += (order as any).total ?? 0;
         byDow[dow].weeks.add(weekKey);
         byHour[hour].orders++;
         byHour[hour].count++;
@@ -57,7 +60,6 @@ export function registerForecastingTools(server: McpServer, clover: CloverClient
         .sort((a, b) => b.totalOrders - a.totalOrders)
         .slice(0, 6);
 
-      // Predict next 7 days
       const predictions = [];
       for (let i = 0; i < 7; i++) {
         const d = new Date();
@@ -89,26 +91,28 @@ export function registerForecastingTools(server: McpServer, clover: CloverClient
     }
   );
 
-  server.tool(
+  tool(
+    server,
     "get_staffing_recommendation",
     "Based on predicted order volume, recommend how many staff members to schedule.",
     {
       date: z.string().describe("ISO date string for the shift you're staffing"),
-      ordersPerStaffPerHour: z.number().optional().default(8).describe("How many orders one staff member can handle per hour"),
+      ordersPerStaffPerHour: z.number().positive().max(100).optional().default(8)
+        .describe("How many orders one staff member can handle per hour"),
     },
     async ({ date, ordersPerStaffPerHour }) => {
-      const target = new Date(date);
+      const targetMs = parseDate(date, "date");
+      const target = new Date(targetMs);
       const dow = target.getDay();
       const ninetyDaysAgo = Date.now() - 90 * 24 * 60 * 60 * 1000;
 
-      const orders = await clover.get<any>(clover.v3("/orders"), {
+      const orders = await clover.getAll(clover.v3("/orders"), {
         filter: [`createdTime>=${ninetyDaysAgo}`, "paymentState=PAID"],
-        limit: 1000,
       });
 
       const weeklyOrders: Record<string, Record<number, number>> = {};
-      for (const order of orders.elements ?? []) {
-        const d = new Date(order.createdTime);
+      for (const order of orders) {
+        const d = new Date((order as any).createdTime);
         const dayOfWeek = d.getDay();
         const hour = d.getHours();
         const weekKey = `${d.getFullYear()}-${Math.floor(d.getTime() / (7 * 24 * 60 * 60 * 1000))}`;

@@ -1,70 +1,43 @@
 {
-  "name": "Lucky – Clover MCP",
-  "description": "Model Context Protocol server for Clover POS — giving AI agents direct access to restaurant operations: menu management, orders, inventory, analytics, customer retention, financial reporting, and more",
-  "version": "1.0.0",
-  "author": "Dokdo Solutions",
-  "homepage": "https://github.com/dokdosolutions-us/clover-mcp-server",
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.dokdosolutions-us/lucky",
+  "description": "🍀✨ MCP server for Clover POS — restaurant operations, inventory, orders, analytics, and retention",
   "repository": {
-    "type": "git",
-    "url": "https://github.com/dokdosolutions-us/clover-mcp-server.git"
+    "url": "https://github.com/dokdosolutions-us/clover-mcp-server",
+    "source": "github"
   },
-  "license": "MIT",
-  "mcp-name": "clover-mcp",
-  "installation": {
-    "npm": "@dokdosolutions/clover-mcp"
-  },
-  "tools": [
+  "version": "1.0.4",
+  "packages": [
     {
-      "name": "Menu Management",
-      "description": "Browse items, categories, modifiers, pricing"
-    },
-    {
-      "name": "Order Management",
-      "description": "Query orders, filter by date/status, inspect line items, delivery platform filtering"
-    },
-    {
-      "name": "Customer Management",
-      "description": "Search, create, profile customers with lifetime spend"
-    },
-    {
-      "name": "Inventory Management",
-      "description": "Stock levels, low-stock alerts, adjustments, auto-86"
-    },
-    {
-      "name": "Analytics",
-      "description": "Revenue by period, peak hours, best-sellers, category breakdown"
-    },
-    {
-      "name": "Employee Management",
-      "description": "Shift activity, hours worked, clock-in/out visibility"
-    },
-    {
-      "name": "Financial Reporting",
-      "description": "Daily/weekly/monthly summaries, tender breakdowns, tax reporting"
-    },
-    {
-      "name": "Customer Retention",
-      "description": "Lapsed customers, win-back messaging, birthday outreach, first-time visitors"
-    },
-    {
-      "name": "Operations",
-      "description": "Refund rates, open orders, void detection, table turn analysis"
-    },
-    {
-      "name": "Forecasting",
-      "description": "Week-over-week trends, seasonal patterns, staffing signals"
-    },
-    {
-      "name": "Reservations",
-      "description": "Booking management, conflict detection"
-    },
-    {
-      "name": "Menu Operations",
-      "description": "Bulk pricing updates, happy hour scheduling, allergen tagging"
-    },
-    {
-      "name": "Smart Queries",
-      "description": "Cross-module insights, happy hour analysis, upsell opportunities"
+      "registryType": "npm",
+      "identifier": "@dokdosolutions/clover-mcp",
+      "version": "1.0.4",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "CLOVER_ACCESS_TOKEN",
+          "description": "Clover merchant API access token (treat as secret; rotate via the Clover dashboard if exposed)",
+          "isRequired": true,
+          "isSecret": true,
+          "format": "string"
+        },
+        {
+          "name": "CLOVER_MERCHANT_ID",
+          "description": "Clover merchant ID (the alphanumeric ID visible in the merchant dashboard URL)",
+          "isRequired": true,
+          "isSecret": false,
+          "format": "string"
+        },
+        {
+          "name": "CLOVER_SANDBOX",
+          "description": "Set to 'true' to use the Clover sandbox API (apisandbox.dev.clover.com). Defaults to false.",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "string"
+        }
+      ]
     }
   ]
 }

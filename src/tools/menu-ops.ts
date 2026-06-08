@@ -1,24 +1,27 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { CloverClient } from "../clover-client.js";
+import { tool } from "../tool-wrapper.js";
 
+const CLOVER_ID = z.string().regex(/^[A-Z0-9]+$/i, "must be alphanumeric").max(40);
 const ALLERGEN_TAG_PREFIX = "allergen:";
 
 export function registerMenuOpsTools(server: McpServer, clover: CloverClient) {
 
-  server.tool(
+  tool(
+    server,
     "tag_item_allergens",
     "Tag a menu item with allergen information. Tags are stored in item labels and searchable.",
     {
-      itemId: z.string(),
-      allergens: z.array(z.enum(["gluten", "shellfish", "dairy", "nuts", "eggs", "soy", "fish", "peanuts"])),
+      itemId: CLOVER_ID,
+      allergens: z.array(z.enum(["gluten", "shellfish", "dairy", "nuts", "eggs", "soy", "fish", "peanuts"])).max(20),
       clear: z.boolean().optional().default(false).describe("Set true to remove all allergen tags from this item"),
     },
     async ({ itemId, allergens, clear }) => {
       const item = await clover.get<any>(clover.v3(`/items/${itemId}`));
 
       // Allergen info is stored in alternateName as "Contains: x, y, z"
-      // Preserve any non-allergen content in alternateName
+      // Preserve any non-allergen content in alternateName.
       const existing = item.alternateName ?? "";
       const allergenMarker = "Contains: ";
       const nonAllergenPart = existing.includes(allergenMarker)
@@ -50,7 +53,8 @@ export function registerMenuOpsTools(server: McpServer, clover: CloverClient) {
     }
   );
 
-  server.tool(
+  tool(
+    server,
     "get_items_by_dietary",
     "Filter menu items by dietary restriction. Searches item names and alternate names for tags.",
     {
@@ -62,13 +66,12 @@ export function registerMenuOpsTools(server: McpServer, clover: CloverClient) {
         limit: 200,
       });
 
-      // Search item names and alternateName for restriction keywords
       const keywords: Record<string, string[]> = {
         "vegetarian": ["vegetarian", "veggie", "chay", "no meat"],
         "vegan": ["vegan", "plant-based"],
         "gluten-free": ["gluten-free", "gf", "no gluten"],
         "dairy-free": ["dairy-free", "no dairy", "no cheese", "no cream"],
-        "nut-free": ["nut-free", "no nuts", "allergen:nuts"],
+        "nut-free": ["nut-free", "no nuts", `${ALLERGEN_TAG_PREFIX}nuts`],
         "shellfish-free": ["shellfish-free", "no shellfish", "no shrimp", "no crab"],
         "halal": ["halal"],
         "kosher": ["kosher"],
@@ -99,13 +102,14 @@ export function registerMenuOpsTools(server: McpServer, clover: CloverClient) {
     }
   );
 
-  server.tool(
+  tool(
+    server,
     "seasonal_menu_toggle",
     "Show or hide an entire menu category at once. Use for seasonal specials, daily features, or out-of-season items.",
     {
-      categoryId: z.string().describe("Category ID to toggle"),
+      categoryId: CLOVER_ID,
       visible: z.boolean().describe("true = show all items, false = hide all items in this category"),
-      reason: z.string().optional().describe("e.g. 'summer specials ended', 'Lunar New Year menu'"),
+      reason: z.string().max(500).optional().describe("e.g. 'summer specials ended', 'Lunar New Year menu'"),
     },
     async ({ categoryId, visible, reason }) => {
       const data = await clover.get<any>(clover.v3("/items"), {
@@ -135,7 +139,8 @@ export function registerMenuOpsTools(server: McpServer, clover: CloverClient) {
     }
   );
 
-  server.tool(
+  tool(
+    server,
     "get_menu_health_check",
     "Audit the menu for common issues: missing prices, hidden items, items with no category, empty modifier groups.",
     {},

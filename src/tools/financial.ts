@@ -1,38 +1,33 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { CloverClient } from "../clover-client.js";
+import { tool } from "../tool-wrapper.js";
+import { resolvePeriod } from "../lib/date.js";
 
 export function registerFinancialTools(server: McpServer, clover: CloverClient) {
-
-  server.tool(
+  tool(
+    server,
     "get_tips_report",
     "Tips breakdown by employee for a period. Essential for payroll and IRS reporting.",
     {
       period: z.enum(["today", "yesterday", "week", "month"]).optional().default("week"),
     },
     async ({ period }) => {
-      const now = new Date();
-      let start: Date;
-      if (period === "today") { start = new Date(now.setHours(0, 0, 0, 0)); }
-      else if (period === "yesterday") { const y = new Date(); y.setDate(y.getDate() - 1); start = new Date(y.setHours(0, 0, 0, 0)); }
-      else if (period === "week") { start = new Date(now); start.setDate(now.getDate() - 7); }
-      else { start = new Date(now.getFullYear(), now.getMonth(), 1); }
+      const { startMs } = resolvePeriod(period);
 
-      const orders = await clover.get<any>(clover.v3("/orders"), {
-        filter: [`createdTime>=${start.getTime()}`, "paymentState=PAID"],
+      const orders = await clover.getAll(clover.v3("/orders"), {
+        filter: [`createdTime>=${startMs}`, "paymentState=PAID"],
         expand: "payments,employee",
-        limit: 500,
       });
 
       const empTips: Record<string, { name: string; tipsCents: number; orders: number }> = {};
       let totalTipsCents = 0;
 
-      for (const order of orders.elements ?? []) {
-        const empName = order.employee?.name ?? "Unknown";
-        const empId = order.employee?.id ?? "unknown";
+      for (const order of orders) {
+        const empName = (order as any).employee?.name ?? "Unknown";
+        const empId = (order as any).employee?.id ?? "unknown";
         if (!empTips[empId]) empTips[empId] = { name: empName, tipsCents: 0, orders: 0 };
-
-        for (const p of order.payments?.elements ?? []) {
+        for (const p of (order as any).payments?.elements ?? []) {
           const tip = p.tipAmount ?? 0;
           empTips[empId].tipsCents += tip;
           totalTipsCents += tip;
@@ -62,79 +57,64 @@ export function registerFinancialTools(server: McpServer, clover: CloverClient) 
     }
   );
 
-  server.tool(
+  tool(
+    server,
     "get_tax_report",
-    "Taxable sales summary for accounting. Breaks down gross sales, tax collected, and net by tax rate.",
+    "Taxable sales summary for accounting. Breaks down gross sales, tax collected, and net.",
     {
       period: z.enum(["today", "week", "month", "custom"]).optional().default("month"),
       startDate: z.string().optional(),
       endDate: z.string().optional(),
     },
     async ({ period, startDate, endDate }) => {
-      if (period === "custom" && (!startDate || !endDate)) {
-        return { isError: true, content: [{ type: "text" as const, text: "startDate and endDate are required when period=custom" }] };
-      }
+      const { startMs, endMs, label } = resolvePeriod(period, startDate, endDate);
 
-      const now = new Date();
-      let start: Date, end: Date = new Date();
-      if (period === "today") { start = new Date(now.setHours(0, 0, 0, 0)); }
-      else if (period === "week") { start = new Date(now); start.setDate(now.getDate() - 7); }
-      else if (period === "month") { start = new Date(now.getFullYear(), now.getMonth(), 1); }
-      else { start = new Date(startDate!); end = new Date(endDate!); }
-
-      const orders = await clover.get<any>(clover.v3("/orders"), {
-        filter: [`createdTime>=${start.getTime()}`, `createdTime<=${end.getTime()}`, "paymentState=PAID"],
-        expand: "lineItems",
-        limit: 500,
+      const orders = await clover.getAll(clover.v3("/orders"), {
+        filter: [`createdTime>=${startMs}`, `createdTime<=${endMs}`, "paymentState=PAID"],
       });
 
       let grossCents = 0, taxCents = 0, netCents = 0;
-      for (const order of orders.elements ?? []) {
-        grossCents += order.total ?? 0;
-        taxCents += order.taxAmount ?? 0;
-        netCents += (order.total ?? 0) - (order.taxAmount ?? 0);
+      for (const order of orders) {
+        grossCents += (order as any).total ?? 0;
+        taxCents += (order as any).taxAmount ?? 0;
+        netCents += ((order as any).total ?? 0) - ((order as any).taxAmount ?? 0);
       }
 
       return {
         content: [{
           type: "text",
           text: JSON.stringify({
-            period,
-            from: start.toDateString(),
-            to: end.toDateString(),
+            period: label,
+            from: new Date(startMs).toDateString(),
+            to: new Date(endMs).toDateString(),
             grossSales: `$${(grossCents / 100).toFixed(2)}`,
             taxCollected: `$${(taxCents / 100).toFixed(2)}`,
             netSales: `$${(netCents / 100).toFixed(2)}`,
-            totalOrders: orders.elements?.length ?? 0,
+            totalOrders: orders.length,
           }, null, 2),
         }],
       };
     }
   );
 
-  server.tool(
+  tool(
+    server,
     "get_discount_void_report",
     "Track discounts and voided orders. High numbers can indicate over-comping or potential internal theft.",
     {
       period: z.enum(["today", "week", "month"]).optional().default("week"),
     },
     async ({ period }) => {
-      const now = new Date();
-      let start: Date;
-      if (period === "today") { start = new Date(now.setHours(0, 0, 0, 0)); }
-      else if (period === "week") { start = new Date(now); start.setDate(now.getDate() - 7); }
-      else { start = new Date(now.getFullYear(), now.getMonth(), 1); }
+      const { startMs } = resolvePeriod(period);
 
       const [orders, refunds] = await Promise.all([
-        clover.get<any>(clover.v3("/orders"), {
-          filter: `createdTime>=${start.getTime()}`,
+        clover.getAll(clover.v3("/orders"), {
+          filter: `createdTime>=${startMs}`,
           expand: "discounts,lineItems,employee",
-          limit: 500,
         }),
-        clover.get<any>(clover.v3("/refunds"), {
-          filter: `createdTime>=${start.getTime()}`,
+        clover.getAll(clover.v3("/refunds"), {
+          filter: `createdTime>=${startMs}`,
           expand: "payment,employee",
-          limit: 200,
         }),
       ]);
 
@@ -142,23 +122,27 @@ export function registerFinancialTools(server: McpServer, clover: CloverClient) 
       const discountsByEmployee: Record<string, { name: string; discountCents: number; count: number }> = {};
       const voidedOrders = [];
 
-      for (const order of orders.elements ?? []) {
-        const discounts = order.discounts?.elements ?? [];
+      for (const order of orders) {
+        const discounts = (order as any).discounts?.elements ?? [];
         for (const d of discounts) {
           const amt = d.amount ?? 0;
           totalDiscountCents += amt;
-          const empId = order.employee?.id ?? "unknown";
-          const empName = order.employee?.name ?? "Unknown";
+          const empId = (order as any).employee?.id ?? "unknown";
+          const empName = (order as any).employee?.name ?? "Unknown";
           if (!discountsByEmployee[empId]) discountsByEmployee[empId] = { name: empName, discountCents: 0, count: 0 };
           discountsByEmployee[empId].discountCents += amt;
           discountsByEmployee[empId].count++;
         }
-        if (order.state === "VOIDED") {
-          voidedOrders.push({ id: order.id, total: `$${((order.total ?? 0) / 100).toFixed(2)}`, employee: order.employee?.name });
+        if ((order as any).state === "VOIDED") {
+          voidedOrders.push({
+            id: (order as any).id,
+            total: `$${(((order as any).total ?? 0) / 100).toFixed(2)}`,
+            employee: (order as any).employee?.name,
+          });
         }
       }
 
-      const refundList = (refunds.elements ?? []).map((r: any) => ({
+      const refundList = refunds.map((r: any) => ({
         amount: `$${((r.amount ?? 0) / 100).toFixed(2)}`,
         employee: r.employee?.name ?? "Unknown",
         reason: r.reason ?? "No reason given",
@@ -181,39 +165,32 @@ export function registerFinancialTools(server: McpServer, clover: CloverClient) 
     }
   );
 
-  server.tool(
+  tool(
+    server,
     "get_labor_vs_revenue",
     "Compare labor hours and estimated cost against revenue for a period. Key metric for restaurant profitability.",
     {
       period: z.enum(["today", "week", "month"]).optional().default("week"),
-      avgHourlyWage: z.number().optional().default(15).describe("Average hourly wage in dollars for labor cost estimate"),
+      avgHourlyWage: z.number().positive().max(500).optional().default(15).describe("Average hourly wage in dollars"),
     },
     async ({ period, avgHourlyWage }) => {
-      const now = new Date();
-      let start: Date;
-      if (period === "today") { start = new Date(now.setHours(0, 0, 0, 0)); }
-      else if (period === "week") { start = new Date(now); start.setDate(now.getDate() - 7); }
-      else { start = new Date(now.getFullYear(), now.getMonth(), 1); }
+      const { startMs } = resolvePeriod(period);
 
       const [orders, shifts] = await Promise.all([
-        clover.get<any>(clover.v3("/orders"), {
-          filter: [`createdTime>=${start.getTime()}`, "paymentState=PAID"],
-          limit: 500,
+        clover.getAll(clover.v3("/orders"), {
+          filter: [`createdTime>=${startMs}`, "paymentState=PAID"],
         }),
-        clover.get<any>(clover.v3("/shifts"), {
-          filter: `inTime>=${start.getTime()}`,
+        clover.getAll(clover.v3("/shifts"), {
+          filter: `inTime>=${startMs}`,
           expand: "employee",
-          limit: 200,
         }),
       ]);
 
-      const revenueCents = (orders.elements ?? []).reduce((s: number, o: any) => s + (o.total ?? 0), 0);
-      let totalHours = 0;
-      for (const s of shifts.elements ?? []) {
-        const ms = (s.outTime ?? Date.now()) - s.inTime;
-        totalHours += ms / 1000 / 60 / 60;
-      }
-
+      const revenueCents = orders.reduce((s: number, o: any) => s + (o.total ?? 0), 0);
+      const totalHours = shifts.reduce((s: number, sh: any) => {
+        const durationMs = (sh.outTime ?? Date.now()) - sh.inTime;
+        return s + durationMs / (1000 * 60 * 60);
+      }, 0);
       const laborCostCents = Math.round(totalHours * avgHourlyWage * 100);
       const laborPct = revenueCents > 0 ? ((laborCostCents / revenueCents) * 100).toFixed(1) : "N/A";
 
@@ -225,8 +202,7 @@ export function registerFinancialTools(server: McpServer, clover: CloverClient) 
             revenue: `$${(revenueCents / 100).toFixed(2)}`,
             laborHours: totalHours.toFixed(1),
             estimatedLaborCost: `$${(laborCostCents / 100).toFixed(2)}`,
-            laborCostPercentage: `${laborPct}%`,
-            benchmark: "Healthy restaurant labor cost: 25-35% of revenue",
+            laborCostPercent: typeof laborPct === "string" ? `${laborPct}%` : laborPct,
           }, null, 2),
         }],
       };

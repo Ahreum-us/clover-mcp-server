@@ -1,0 +1,44 @@
+# Source files (transpiled to dist/)
+src/
+tsconfig.json
+
+# Tests
+tests/
+*.test.ts
+jest.config.cjs
+
+# Development
+.git/
+.gitignore
+.env
+.env.example
+.env.local
+.env.*.local
+*.log
+
+# Node modules
+node_modules/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.circleci/
+
+# Root docs
+README.md
+LICENSE
+
+# Code review artifacts
+REVIEW_BUNDLE.txt
+
+# Lock files (recommended for packages)
+# Uncomment if you want to include package-lock.json
+# package-lock.json

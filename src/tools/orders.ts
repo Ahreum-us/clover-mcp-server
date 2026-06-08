@@ -1,13 +1,16 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { CloverClient } from "../clover-client.js";
+import { tool } from "../tool-wrapper.js";
+import { parseDate, resolvePeriod } from "../lib/date.js";
 
 export function registerOrderTools(server: McpServer, clover: CloverClient) {
-  server.tool(
+  tool(
+    server,
     "get_recent_orders",
     "Get recent orders. Defaults to last 50.",
     {
-      limit: z.number().optional().default(50).describe("Number of orders to return"),
+      limit: z.number().int().positive().max(500).optional().default(50),
       status: z.enum(["open", "closed", "all"]).optional().default("all"),
     },
     async ({ limit, status }) => {
@@ -22,10 +25,11 @@ export function registerOrderTools(server: McpServer, clover: CloverClient) {
     }
   );
 
-  server.tool(
+  tool(
+    server,
     "get_order",
-    "Get full details for a single order by ID",
-    { orderId: z.string() },
+    "Get full details for a single order by ID.",
+    { orderId: z.string().regex(/^[A-Z0-9]+$/i, "orderId must be alphanumeric").max(40) },
     async ({ orderId }) => {
       const data = await clover.get<any>(clover.v3(`/orders/${orderId}`), {
         expand: "lineItems,payments,customers,discounts",
@@ -34,64 +38,59 @@ export function registerOrderTools(server: McpServer, clover: CloverClient) {
     }
   );
 
-  server.tool(
+  tool(
+    server,
     "get_orders_by_date",
-    "Get orders within a date range",
+    "Get orders within a date range.",
     {
       startDate: z.string().describe("ISO date string e.g. 2026-06-01"),
       endDate: z.string().describe("ISO date string e.g. 2026-06-05"),
     },
     async ({ startDate, endDate }) => {
-      const start = new Date(startDate).getTime();
-      const end = new Date(endDate).getTime();
-      const data = await clover.get<any>(clover.v3("/orders"), {
+      const start = parseDate(startDate, "startDate");
+      const end = parseDate(endDate, "endDate");
+      if (end < start) throw new Error(`endDate (${endDate}) is before startDate (${startDate}).`);
+      const elements = await clover.getAll(clover.v3("/orders"), {
         filter: [`createdTime>=${start}`, `createdTime<=${end}`],
         expand: "lineItems,payments",
-        limit: 200,
         orderBy: "createdTime DESC",
       });
-      return { content: [{ type: "text", text: JSON.stringify(data.elements, null, 2) }] };
+      return { content: [{ type: "text", text: JSON.stringify(elements, null, 2) }] };
     }
   );
 
-  server.tool(
+  tool(
+    server,
     "get_open_orders",
-    "Get all currently open (unpaid) orders — useful during service",
+    "Get all currently open (unpaid) orders — useful during service.",
     {},
     async () => {
-      const data = await clover.get<any>(clover.v3("/orders"), {
+      const elements = await clover.getAll(clover.v3("/orders"), {
         filter: "paymentState=OPEN",
         expand: "lineItems,customers",
-        limit: 100,
         orderBy: "createdTime DESC",
       });
-      return { content: [{ type: "text", text: JSON.stringify(data.elements, null, 2) }] };
+      return { content: [{ type: "text", text: JSON.stringify(elements, null, 2) }] };
     }
   );
 
-  server.tool(
+  tool(
+    server,
     "get_delivery_orders",
     "Get orders from third-party delivery platforms (UberEats, DoorDash, GrubHub, Postmates, etc). Groups by service and shows revenue breakdown per platform.",
     {
       period: z.enum(["today", "yesterday", "week", "month"]).optional().default("week"),
-      service: z.enum(["all", "ubereats", "doordash", "grubhub", "postmates", "unknown"]).optional().default("all").describe("Filter to a specific delivery service"),
+      service: z.enum(["all", "ubereats", "doordash", "grubhub", "postmates", "unknown"]).optional().default("all"),
     },
     async ({ period, service }) => {
-      const now = new Date();
-      let start: Date;
-      if (period === "today") { start = new Date(now.setHours(0, 0, 0, 0)); }
-      else if (period === "yesterday") { const y = new Date(); y.setDate(y.getDate() - 1); start = new Date(y.setHours(0, 0, 0, 0)); }
-      else if (period === "week") { start = new Date(now); start.setDate(now.getDate() - 7); }
-      else { start = new Date(now.getFullYear(), now.getMonth(), 1); }
+      const { startMs } = resolvePeriod(period);
 
-      const data = await clover.get<any>(clover.v3("/orders"), {
-        filter: `createdTime>=${start.getTime()}`,
+      const elements = await clover.getAll(clover.v3("/orders"), {
+        filter: `createdTime>=${startMs}`,
         expand: "orderType,lineItems,payments,customers",
-        limit: 500,
         orderBy: "createdTime DESC",
       });
 
-      // Normalize delivery service name from orderType label or tender label
       const detectService = (order: any): string => {
         const sources = [
           order.orderType?.label,
@@ -115,19 +114,18 @@ export function registerOrderTools(server: McpServer, clover: CloverClient) {
       };
 
       const groups: Record<string, { orders: number; revenueCents: number; items: any[] }> = {};
-
-      for (const order of data.elements ?? []) {
+      for (const order of elements) {
         const svc = detectService(order);
         if (service !== "all" && svc !== service) continue;
         if (!groups[svc]) groups[svc] = { orders: 0, revenueCents: 0, items: [] };
         groups[svc].orders++;
-        groups[svc].revenueCents += order.total ?? 0;
+        groups[svc].revenueCents += (order as any).total ?? 0;
         groups[svc].items.push({
-          id: order.id,
-          total: `$${((order.total ?? 0) / 100).toFixed(2)}`,
-          createdAt: new Date(order.createdTime).toISOString(),
-          customer: order.customers?.elements?.[0]
-            ? `${order.customers.elements[0].firstName ?? ""} ${order.customers.elements[0].lastName ?? ""}`.trim()
+          id: (order as any).id,
+          total: `$${(((order as any).total ?? 0) / 100).toFixed(2)}`,
+          createdAt: new Date((order as any).createdTime).toISOString(),
+          customer: (order as any).customers?.elements?.[0]
+            ? `${(order as any).customers.elements[0].firstName ?? ""} ${(order as any).customers.elements[0].lastName ?? ""}`.trim()
             : null,
         });
       }
@@ -177,15 +175,20 @@ export function registerOrderTools(server: McpServer, clover: CloverClient) {
     }
   );
 
-  server.tool(
+  tool(
+    server,
     "create_refund",
-    "Refund a payment on an order",
+    "Refund a payment on an order.",
     {
-      paymentId: z.string().describe("Payment ID to refund"),
-      amountCents: z.number().optional().describe("Partial refund amount in cents. Omit for full refund."),
-      reason: z.string().optional().describe("Reason for the refund"),
+      paymentId: z.string().regex(/^[A-Z0-9]+$/i, "paymentId must be alphanumeric").max(40),
+      amountCents: z.number().int().positive().optional().describe("Partial refund amount in cents. Omit for full refund."),
+      reason: z.string().max(500).optional(),
+      confirm: z.boolean().optional().default(false).describe("Must be true to apply changes"),
     },
-    async ({ paymentId, amountCents, reason }) => {
+    async ({ paymentId, amountCents, reason, confirm }) => {
+      if (!confirm) {
+        return { content: [{ type: "text", text: `DRY RUN: Would refund ${amountCents ? `${amountCents} cents` : "full amount"} for payment ${paymentId}. Set confirm=true to apply.` }] };
+      }
       const body: Record<string, unknown> = { payment: { id: paymentId } };
       if (amountCents) body.amount = amountCents;
       if (reason) body.reason = reason;

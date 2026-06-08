@@ -8,11 +8,10 @@ export function registerInventoryTools(server: McpServer, clover: CloverClient) 
     "Get current stock levels for all tracked inventory items",
     {},
     async () => {
-      const data = await clover.get<any>(clover.v3("/item_stocks"), {
+      const elements = await clover.getAll(clover.v3("/item_stocks"), {
         expand: "item",
-        limit: 200,
       });
-      return { content: [{ type: "text", text: JSON.stringify(data.elements, null, 2) }] };
+      return { content: [{ type: "text", text: JSON.stringify(elements, null, 2) }] };
     }
   );
 
@@ -23,12 +22,11 @@ export function registerInventoryTools(server: McpServer, clover: CloverClient) 
       threshold: z.number().optional().default(5).describe("Warn when quantity is at or below this number"),
     },
     async ({ threshold }) => {
-      const data = await clover.get<any>(clover.v3("/item_stocks"), {
+      const elements = await clover.getAll(clover.v3("/item_stocks"), {
         expand: "item",
-        limit: 200,
       });
 
-      const lowStock = (data.elements ?? []).filter(
+      const lowStock = elements.filter(
         (s: any) => s.quantity !== undefined && s.quantity <= threshold
       ).map((s: any) => ({
         itemId: s.item?.id,
@@ -51,9 +49,13 @@ export function registerInventoryTools(server: McpServer, clover: CloverClient) 
     {
       itemId: z.string().describe("Clover item ID"),
       quantity: z.number().describe("New stock quantity"),
+      confirm: z.boolean().optional().default(false).describe("Must be true to apply changes"),
       note: z.string().optional().describe("e.g. 'Received delivery from supplier'"),
     },
-    async ({ itemId, quantity }) => {
+    async ({ itemId, quantity, confirm }) => {
+      if (!confirm) {
+        return { content: [{ type: "text", text: `DRY RUN: Would update stock for item ${itemId} to ${quantity}. Set confirm=true to apply.` }] };
+      }
       await clover.post<any>(clover.v3(`/item_stocks/${itemId}`), { quantity });
       return {
         content: [{ type: "text", text: `Stock for item ${itemId} updated to ${quantity}.` }],
@@ -67,9 +69,10 @@ export function registerInventoryTools(server: McpServer, clover: CloverClient) 
     {
       itemId: z.string().describe("Clover item ID"),
       delta: z.number().describe("Amount to add (positive) or remove (negative)"),
+      confirm: z.boolean().optional().default(false).describe("Must be true to apply changes"),
       reason: z.string().optional().describe("e.g. 'waste', 'spillage', 'delivery'"),
     },
-    async ({ itemId, delta, reason }) => {
+    async ({ itemId, delta, confirm, reason }) => {
       const current = await clover.get<any>(clover.v3(`/item_stocks/${itemId}`));
       if (current.quantity === undefined || current.quantity === null) {
         throw new Error(`Item ${itemId} has no tracked stock quantity.`);
@@ -78,6 +81,11 @@ export function registerInventoryTools(server: McpServer, clover: CloverClient) 
       if (newQty < 0) {
         throw new Error(`Adjustment would result in negative stock (${current.quantity} + ${delta} = ${newQty}). Aborting.`);
       }
+
+      if (!confirm) {
+        return { content: [{ type: "text", text: `DRY RUN: Would adjust ${itemId}: ${current.quantity} → ${newQty}${reason ? ` (${reason})` : ""}. Set confirm=true to apply.` }] };
+      }
+
       await clover.post<any>(clover.v3(`/item_stocks/${itemId}`), { quantity: newQty });
       return {
         content: [{
@@ -91,14 +99,15 @@ export function registerInventoryTools(server: McpServer, clover: CloverClient) 
   server.tool(
     "auto_86_depleted_items",
     "Scan inventory and automatically hide any items with zero stock from the menu",
-    {},
-    async () => {
-      const stocks = await clover.get<any>(clover.v3("/item_stocks"), {
+    {
+      confirm: z.boolean().optional().default(false).describe("Must be true to apply changes"),
+    },
+    async ({ confirm }) => {
+      const elements = await clover.getAll(clover.v3("/item_stocks"), {
         expand: "item",
-        limit: 200,
       });
 
-      const depleted = (stocks.elements ?? []).filter(
+      const depleted = elements.filter(
         (s: any) => s.quantity !== undefined && s.quantity <= 0
       );
 
@@ -106,11 +115,15 @@ export function registerInventoryTools(server: McpServer, clover: CloverClient) 
         return { content: [{ type: "text", text: "No depleted items found. Nothing to 86." }] };
       }
 
-      const results: string[] = [];
+      const results: string[] = depleted.map(s => s.item?.name ?? s.item?.id).filter(Boolean);
+
+      if (!confirm) {
+        return { content: [{ type: "text", text: `DRY RUN: Would auto-86 ${results.length} item(s): ${results.join(", ")}. Set confirm=true to apply.` }] };
+      }
+
       for (const s of depleted) {
         if (!s.item?.id) continue;
         await clover.post<any>(clover.v3(`/items/${s.item.id}`), { hidden: true });
-        results.push(s.item.name ?? s.item.id);
       }
 
       return {

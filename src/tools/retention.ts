@@ -1,38 +1,48 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { CloverClient } from "../clover-client.js";
+import { tool } from "../tool-wrapper.js";
+import { resolvePeriod } from "../lib/date.js";
+
+const CLOVER_ID = z.string().regex(/^[A-Z0-9]+$/i, "must be alphanumeric").max(40);
 
 export function registerRetentionTools(server: McpServer, clover: CloverClient) {
 
-  server.tool(
+  tool(
+    server,
     "get_lapsed_customers",
     "Find customers who haven't visited in a while. Great for win-back campaigns.",
     {
-      daysSinceVisit: z.number().optional().default(30).describe("Flag customers who haven't visited in this many days"),
-      minPastVisits: z.number().optional().default(2).describe("Only include customers with at least this many past visits (filters out one-timers)"),
+      daysSinceVisit: z.number().int().positive().max(3650).optional().default(30)
+        .describe("Flag customers who haven't visited in this many days"),
+      minPastVisits: z.number().int().positive().max(1000).optional().default(2)
+        .describe("Only include customers with at least this many past visits (filters out one-timers)"),
     },
     async ({ daysSinceVisit, minPastVisits }) => {
       const cutoff = Date.now() - daysSinceVisit * 24 * 60 * 60 * 1000;
       const lookback = Date.now() - 365 * 24 * 60 * 60 * 1000;
 
-      const orders = await clover.get<any>(clover.v3("/orders"), {
+      // PHASE 3: migrated from get(limit:1000) to getAll() — busy restaurants
+      // exceed 1000 paid orders/year and would silently truncate.
+      const orders = await clover.getAll(clover.v3("/orders"), {
         filter: [`createdTime>=${lookback}`, "paymentState=PAID"],
         expand: "customers",
-        limit: 1000,
       });
 
       const customerActivity: Record<string, {
         name: string; lastVisit: number; visits: number; totalCents: number;
       }> = {};
 
-      for (const order of orders.elements ?? []) {
-        const c = order.customers?.elements?.[0];
+      for (const order of orders) {
+        const c = (order as any).customers?.elements?.[0];
         if (!c?.id) continue;
         const name = `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim();
         if (!customerActivity[c.id]) customerActivity[c.id] = { name, lastVisit: 0, visits: 0, totalCents: 0 };
-        if (order.createdTime > customerActivity[c.id].lastVisit) customerActivity[c.id].lastVisit = order.createdTime;
+        if ((order as any).createdTime > customerActivity[c.id].lastVisit) {
+          customerActivity[c.id].lastVisit = (order as any).createdTime;
+        }
         customerActivity[c.id].visits++;
-        customerActivity[c.id].totalCents += order.total ?? 0;
+        customerActivity[c.id].totalCents += (order as any).total ?? 0;
       }
 
       const lapsed = Object.entries(customerActivity)
@@ -59,15 +69,16 @@ export function registerRetentionTools(server: McpServer, clover: CloverClient) 
     }
   );
 
-  server.tool(
+  tool(
+    server,
     "draft_winback_message",
     "Generate a personalized win-back message for a lapsed customer via WhatsApp or SMS.",
     {
-      customerId: z.string().describe("Clover customer ID"),
-      restaurantName: z.string().optional().default("our restaurant"),
-      offerDetail: z.string().optional().describe("Optional promo to include e.g. '10% off your next visit'"),
+      customerId: CLOVER_ID.describe("Clover customer ID"),
+      restaurantName: z.string().max(200).optional().default("our restaurant"),
+      offerDetail: z.string().max(300).optional().describe("Optional promo to include e.g. '10% off your next visit'"),
       channel: z.enum(["whatsapp", "sms", "email"]).optional().default("whatsapp"),
-      language: z.string().optional().describe("BCP-47 language code for the message (e.g. 'vi' for Vietnamese, 'ko' for Korean, 'es' for Spanish). Defaults to English."),
+      language: z.string().max(20).optional().describe("BCP-47 language code (e.g. 'vi', 'ko', 'es'). Defaults to English."),
     },
     async ({ customerId, restaurantName, offerDetail, channel, language }) => {
       const [profile, orders] = await Promise.all([
@@ -121,11 +132,12 @@ export function registerRetentionTools(server: McpServer, clover: CloverClient) 
     }
   );
 
-  server.tool(
+  tool(
+    server,
     "get_customer_birthdays",
-    "Find customers with birthdays this month for outreach. Requires birthday to be stored in customer note or profile.",
+    "Find customers with birthdays this month for outreach. Requires birthday to be stored in customer note as 'birthday: MM/DD'.",
     {
-      month: z.number().min(1).max(12).optional().describe("Month number 1-12. Defaults to current month."),
+      month: z.number().int().min(1).max(12).optional().describe("Month number 1-12. Defaults to current month."),
     },
     async ({ month }) => {
       const targetMonth = month ?? new Date().getMonth() + 1;
@@ -134,7 +146,6 @@ export function registerRetentionTools(server: McpServer, clover: CloverClient) 
         limit: 500,
       });
 
-      // Clover doesn't have a native birthday field — check the note field for birthday patterns
       const birthdayPattern = /b(?:irth)?(?:day)?[:\s]+(\d{1,2})[\/\-](\d{1,2})/i;
       const matches = (customers.elements ?? []).filter((c: any) => {
         if (!c.note) return false;
@@ -166,40 +177,37 @@ export function registerRetentionTools(server: McpServer, clover: CloverClient) 
     }
   );
 
-  server.tool(
+  tool(
+    server,
     "get_first_time_customers",
     "Identify new customers who visited for the first time in a given period.",
     {
       period: z.enum(["today", "yesterday", "week"]).optional().default("week"),
     },
     async ({ period }) => {
-      const now = new Date();
-      let start: Date;
-      if (period === "today") { start = new Date(now.setHours(0, 0, 0, 0)); }
-      else if (period === "yesterday") { const y = new Date(); y.setDate(y.getDate() - 1); start = new Date(y.setHours(0, 0, 0, 0)); }
-      else { start = new Date(now); start.setDate(now.getDate() - 7); }
+      const { startMs } = resolvePeriod(period);
 
-      // Use 2-year lookback — fetching from epoch 0 breaks for restaurants with long history
+      // 2-year lookback to compute "first visit" accurately. Migrated to
+      // getAll so high-volume merchants don't silently miss returning customers.
       const twoYearsAgo = Date.now() - 2 * 365 * 24 * 60 * 60 * 1000;
-      const allOrders = await clover.get<any>(clover.v3("/orders"), {
+      const allOrders = await clover.getAll(clover.v3("/orders"), {
         filter: [`createdTime>=${twoYearsAgo}`, "paymentState=PAID"],
         expand: "customers",
-        limit: 1000,
       });
 
       const firstVisit: Record<string, number> = {};
-      for (const o of allOrders.elements ?? []) {
-        const c = o.customers?.elements?.[0];
+      for (const o of allOrders) {
+        const c = (o as any).customers?.elements?.[0];
         if (!c?.id) continue;
-        if (!firstVisit[c.id] || o.createdTime < firstVisit[c.id]) {
-          firstVisit[c.id] = o.createdTime;
+        if (!firstVisit[c.id] || (o as any).createdTime < firstVisit[c.id]) {
+          firstVisit[c.id] = (o as any).createdTime;
         }
       }
 
-      const newCustomers = allOrders.elements
-        ?.filter((o: any) => {
+      const newCustomers = allOrders
+        .filter((o: any) => {
           const c = o.customers?.elements?.[0];
-          return c?.id && firstVisit[c.id] >= start.getTime();
+          return c?.id && firstVisit[c.id] >= startMs;
         })
         .map((o: any) => {
           const c = o.customers.elements[0];
@@ -209,7 +217,7 @@ export function registerRetentionTools(server: McpServer, clover: CloverClient) 
             firstVisit: new Date(o.createdTime).toDateString(),
             orderTotal: `$${((o.total ?? 0) / 100).toFixed(2)}`,
           };
-        }) ?? [];
+        });
 
       return {
         content: [{
