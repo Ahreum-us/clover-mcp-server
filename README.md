@@ -58,7 +58,7 @@ The difference is in what the tools actually do. Instead of `clover_update_item_
 
 Other servers give an AI the ability to talk to 🍀 Clover. This one gives an AI the ability to help run a restaurant.
 
-That's the Dokdo + 🍀 Clover difference.
+That's the Ahreum + 🍀 Clover difference.
 
 ---
 
@@ -161,7 +161,7 @@ Rate limiting is per-instance (per 🍀 Clover merchant), so multi-store deploym
 
 ## Built By
 
-[Dokdo Solutions](https://github.com/dokdosolutions-us) — AI integration for independent restaurant owners.
+[Ahreum](https://github.com/Ahreum-us) — AI integration for independent restaurant owners.
 
 ---
 
