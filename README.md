@@ -70,13 +70,7 @@ That's the Ahreum + 🍀 Clover difference.
 - A [🍀 Clover developer account](https://www.clover.com/developers) with an OAuth app
 - A 🍀 Clover merchant API token (sandbox or production)
 
-### Install via npm (recommended)
-
-```bash
-npx @dokdosolutions/clover-mcp
-```
-
-### Or install from source
+### Install
 
 ```bash
 npm install
@@ -116,16 +110,16 @@ Each 🍀 Clover location has its own merchant ID and API token. Run one instanc
 
 ```json
 "clover-store1": {
-  "command": "npx",
-  "args": ["-y", "@dokdosolutions/clover-mcp"],
+  "command": "node",
+  "args": ["/absolute/path/to/clover-mcp-server/dist/index.js"],
   "env": {
     "CLOVER_ACCESS_TOKEN": "token_for_store1",
     "CLOVER_MERCHANT_ID": "merchant_id_store1"
   }
 },
 "clover-store2": {
-  "command": "npx",
-  "args": ["-y", "@dokdosolutions/clover-mcp"],
+  "command": "node",
+  "args": ["/absolute/path/to/clover-mcp-server/dist/index.js"],
   "env": {
     "CLOVER_ACCESS_TOKEN": "token_for_store2",
     "CLOVER_MERCHANT_ID": "merchant_id_store2"

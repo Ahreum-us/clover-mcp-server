@@ -1,7 +1,7 @@
 {
-  "name": "@dokdosolutions/clover-mcp",
+  "name": "@ahreum/clover-mcp",
   "version": "1.0.4",
-  "mcpName": "io.github.dokdosolutions-us/lucky",
+  "mcpName": "io.github.ahreum-us/lucky",
   "description": "Model Context Protocol server for Clover POS — restaurant operations, menu management, inventory, analytics, and customer retention",
   "main": "dist/index.js",
   "type": "module",

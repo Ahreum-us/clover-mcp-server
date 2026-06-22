@@ -1,43 +1,10 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.dokdosolutions-us/lucky",
+  "name": "io.github.ahreum-us/lucky",
   "description": "🍀✨ MCP server for Clover POS — restaurant operations, inventory, orders, analytics, and retention",
   "repository": {
-    "url": "https://github.com/dokdosolutions-us/clover-mcp-server",
+    "url": "https://github.com/Ahreum-us/clover-mcp-server",
     "source": "github"
   },
-  "version": "1.0.4",
-  "packages": [
-    {
-      "registryType": "npm",
-      "identifier": "@dokdosolutions/clover-mcp",
-      "version": "1.0.4",
-      "transport": {
-        "type": "stdio"
-      },
-      "environmentVariables": [
-        {
-          "name": "CLOVER_ACCESS_TOKEN",
-          "description": "Clover merchant API access token (treat as secret; rotate via the Clover dashboard if exposed)",
-          "isRequired": true,
-          "isSecret": true,
-          "format": "string"
-        },
-        {
-          "name": "CLOVER_MERCHANT_ID",
-          "description": "Clover merchant ID (the alphanumeric ID visible in the merchant dashboard URL)",
-          "isRequired": true,
-          "isSecret": false,
-          "format": "string"
-        },
-        {
-          "name": "CLOVER_SANDBOX",
-          "description": "Set to 'true' to use the Clover sandbox API (apisandbox.dev.clover.com). Defaults to false.",
-          "isRequired": false,
-          "isSecret": false,
-          "format": "string"
-        }
-      ]
-    }
-  ]
+  "version": "1.0.4"
 }
