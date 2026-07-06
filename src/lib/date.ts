@@ -29,6 +29,21 @@ export function parseDate(input: string, fieldName: string): number {
   return ms;
 }
 
+/**
+ * Parse an END date/time. Bare dates ("2026-06-05") mean "through the end of
+ * that day" — users universally expect date ranges inclusive of the end date,
+ * and the old behavior (midnight STARTING the end date) silently excluded the
+ * final day from tax reports and order lookups. Explicit timestamps
+ * ("2026-06-05T14:00:00Z") are honored exactly.
+ */
+export function parseEndDate(input: string, fieldName: string): number {
+  const ms = parseDate(input, fieldName);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(input.trim())) {
+    return ms + 24 * 60 * 60 * 1000 - 1;
+  }
+  return ms;
+}
+
 export type Period = "today" | "yesterday" | "week" | "month" | "custom";
 
 export interface PeriodBounds {
@@ -58,7 +73,7 @@ export function resolvePeriod(
       throw new Error("startDate and endDate are required when period=custom");
     }
     const startMs = parseDate(customStart, "startDate");
-    const endMs = parseDate(customEnd, "endDate");
+    const endMs = parseEndDate(customEnd, "endDate");
     if (endMs < startMs) {
       throw new Error(`endDate (${customEnd}) is before startDate (${customStart}).`);
     }

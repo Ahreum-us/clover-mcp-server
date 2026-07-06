@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { CloverClient } from "../clover-client.js";
 import { tool } from "../tool-wrapper.js";
-import { parseDate, resolvePeriod } from "../lib/date.js";
+import { parseDate, parseEndDate, resolvePeriod } from "../lib/date.js";
 
 export function registerOrderTools(server: McpServer, clover: CloverClient) {
   tool(
@@ -48,7 +48,8 @@ export function registerOrderTools(server: McpServer, clover: CloverClient) {
     },
     async ({ startDate, endDate }) => {
       const start = parseDate(startDate, "startDate");
-      const end = parseDate(endDate, "endDate");
+      // F2 fix: bare end dates are inclusive of that whole day.
+      const end = parseEndDate(endDate, "endDate");
       if (end < start) throw new Error(`endDate (${endDate}) is before startDate (${startDate}).`);
       const elements = await clover.getAll(clover.v3("/orders"), {
         filter: [`createdTime>=${start}`, `createdTime<=${end}`],
@@ -83,10 +84,11 @@ export function registerOrderTools(server: McpServer, clover: CloverClient) {
       service: z.enum(["all", "ubereats", "doordash", "grubhub", "postmates", "unknown"]).optional().default("all"),
     },
     async ({ period, service }) => {
-      const { startMs } = resolvePeriod(period);
+      // F1 fix: bound both ends so "yesterday" excludes today.
+      const { startMs, endMs } = resolvePeriod(period);
 
       const elements = await clover.getAll(clover.v3("/orders"), {
-        filter: `createdTime>=${startMs}`,
+        filter: [`createdTime>=${startMs}`, `createdTime<=${endMs}`],
         expand: "orderType,lineItems,payments,customers",
         orderBy: "createdTime DESC",
       });

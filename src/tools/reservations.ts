@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { CloverClient } from "../clover-client.js";
 import { tool } from "../tool-wrapper.js";
-import { readFileSync, writeFileSync, existsSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, renameSync } from "fs";
 import { randomUUID } from "crypto";
 import { join } from "path";
 
@@ -27,11 +27,29 @@ interface Reservation {
 
 function loadReservations(): Reservation[] {
   if (!existsSync(RESERVATIONS_FILE)) return [];
-  try { return JSON.parse(readFileSync(RESERVATIONS_FILE, "utf-8")); } catch { return []; }
+  try {
+    return JSON.parse(readFileSync(RESERVATIONS_FILE, "utf-8"));
+  } catch (err) {
+    // F6 fix: a corrupt file used to silently become [] — and the next save
+    // then overwrote the corrupt file, permanently losing every reservation.
+    // Now: move the corrupt file aside (recoverable by hand) and fail LOUDLY.
+    const aside = `${RESERVATIONS_FILE}.corrupt-${Date.now()}`;
+    try { renameSync(RESERVATIONS_FILE, aside); } catch { /* best effort */ }
+    console.error(
+      `[clover-mcp][reservations] ${RESERVATIONS_FILE} was unreadable ` +
+      `(${err instanceof Error ? err.message : String(err)}). ` +
+      `Moved it to ${aside} — recover manually if needed. Starting a fresh book.`
+    );
+    return [];
+  }
 }
 
 function saveReservations(data: Reservation[]) {
-  writeFileSync(RESERVATIONS_FILE, JSON.stringify(data, null, 2));
+  // F6 fix: atomic write (tmp + rename) so a crash mid-write can't corrupt
+  // the reservation book.
+  const tmp = `${RESERVATIONS_FILE}.tmp`;
+  writeFileSync(tmp, JSON.stringify(data, null, 2));
+  renameSync(tmp, RESERVATIONS_FILE);
 }
 
 export function registerReservationTools(server: McpServer, clover: CloverClient) {
@@ -43,7 +61,7 @@ export function registerReservationTools(server: McpServer, clover: CloverClient
     {
       customerName: z.string().min(1).max(200),
       partySize: z.number().int().positive().max(500).describe("Number of guests"),
-      date: z.string().max(20).describe("Reservation date e.g. 2026-06-10"),
+      date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD").describe("Reservation date in YYYY-MM-DD format e.g. 2026-06-10"),
       time: z.string().max(20).describe("Reservation time e.g. 7:00 PM"),
       phone: z.string().max(50).optional(),
       notes: z.string().max(1000).optional().describe("Special requests, allergies, occasion, etc."),
@@ -96,7 +114,7 @@ export function registerReservationTools(server: McpServer, clover: CloverClient
     "get_reservations",
     "Get all reservations for a specific date or date range.",
     {
-      date: z.string().max(20).optional().describe("ISO date string e.g. 2026-06-10. Defaults to today."),
+      date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD").optional().describe("ISO date string e.g. 2026-06-10. Defaults to today."),
       status: z.enum(["all", "confirmed", "cancelled", "seated", "no-show"]).optional().default("confirmed"),
     },
     async ({ date, status }) => {
@@ -157,7 +175,7 @@ export function registerReservationTools(server: McpServer, clover: CloverClient
     "get_reservation_summary",
     "Overview of upcoming reservations: total covers, busiest time slots, special requests.",
     {
-      date: z.string().max(20).optional().describe("ISO date string. Defaults to today."),
+      date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD").optional().describe("ISO date string. Defaults to today."),
     },
     async ({ date }) => {
       const targetDate = date ?? new Date().toISOString().split("T")[0];

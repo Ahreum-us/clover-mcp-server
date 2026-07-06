@@ -27,7 +27,7 @@ export function registerSmartTools(server: McpServer, clover: CloverClient) {
           filter: [`createdTime>=${sameDay7Ago}`, `createdTime<=${sameDay7AgoEnd}`, "paymentState=PAID"],
         }),
         clover.getAll(clover.v3("/item_stocks"), { expand: "item" }),
-        clover.get<any>(clover.v3("/orders"), { filter: "paymentState=OPEN", limit: 50 }),
+        clover.getAll(clover.v3("/orders"), { filter: "paymentState=OPEN" }),
       ]);
 
       const totalRevenueCents = orders.reduce((s: number, o: any) => s + (o.total ?? 0), 0);
@@ -55,13 +55,14 @@ export function registerSmartTools(server: McpServer, clover: CloverClient) {
       const result: Record<string, any> = {
         date: new Date(start).toDateString(),
         revenue: `$${(totalRevenueCents / 100).toFixed(2)}`,
+        revenueNote: "gross, includes tax",
         revenueVsLastWeek: revChange !== null ? `${Number(revChange) >= 0 ? "+" : ""}${revChange}%` : "N/A",
         totalOrders: orders.length,
         avgCheck: orders.length > 0 ? `$${(totalRevenueCents / orders.length / 100).toFixed(2)}` : "$0.00",
         totalTips: `$${(tipsCents / 100).toFixed(2)}`,
         topSellers: topItems,
         lowStockAlerts: lowStock,
-        openOrders: openOrdersData.elements?.length ?? 0,
+        openOrders: openOrdersData.length,
       };
 
       if (language && language !== "en") {
@@ -89,15 +90,25 @@ export function registerSmartTools(server: McpServer, clover: CloverClient) {
     async ({ partySize, itemSelections, markupPercent, eventDate, clientName }) => {
       const items = await clover.getAll(clover.v3("/items"));
 
+      // F7 fix: "Pho" used to silently price as whichever of "Pho Ga"/"Pho Bo"
+      // came first. Now: exact name match wins; a single substring match is
+      // accepted; multiple matches are surfaced as ambiguous (priced at $0
+      // with candidates listed) so the caller disambiguates instead of us
+      // guessing with someone's money.
       const lineItems = itemSelections.map(sel => {
-        const match = items.find((i: any) =>
-          i.name?.toLowerCase().includes(sel.itemName.toLowerCase())
-        );
+        const q = sel.itemName.toLowerCase();
+        const candidates = items.filter((i: any) => i.name?.toLowerCase().includes(q));
+        const exact = candidates.find((i: any) => i.name?.toLowerCase() === q);
+        const match = exact ?? (candidates.length === 1 ? candidates[0] : undefined);
         const unitPrice = (match as any)?.price ?? 0;
         const subtotal = unitPrice * sel.quantity;
         return {
           item: (match as any)?.name ?? sel.itemName,
           matched: !!match,
+          ...(candidates.length > 1 && !exact ? {
+            ambiguous: true,
+            candidates: candidates.slice(0, 5).map((c: any) => c.name),
+          } : {}),
           unitPrice: `$${(unitPrice / 100).toFixed(2)}`,
           quantity: sel.quantity,
           subtotal: `$${(subtotal / 100).toFixed(2)}`,
@@ -105,6 +116,7 @@ export function registerSmartTools(server: McpServer, clover: CloverClient) {
         };
       });
 
+      const unresolved = lineItems.filter(l => !l.matched).length;
       const subtotalCents = lineItems.reduce((s, l) => s + l.subtotalCents, 0);
       const markupCents = Math.round(subtotalCents * markupPercent / 100);
       const totalCents = subtotalCents + markupCents;
@@ -113,6 +125,9 @@ export function registerSmartTools(server: McpServer, clover: CloverClient) {
         content: [{
           type: "text",
           text: JSON.stringify({
+            ...(unresolved > 0 ? {
+              warning: `${unresolved} item(s) unmatched or ambiguous — total is INCOMPLETE. Resolve them before quoting the client.`,
+            } : {}),
             quote: {
               client: clientName ?? "TBD",
               eventDate: eventDate ?? "TBD",
@@ -168,6 +183,7 @@ export function registerSmartTools(server: McpServer, clover: CloverClient) {
           type: "text",
           text: JSON.stringify({
             shiftRevenue: `$${(revenueCents / 100).toFixed(2)}`,
+            revenueNote: "gross, includes tax",
             totalOrders: orders.length,
             avgCheck: orders.length > 0
               ? `$${(revenueCents / orders.length / 100).toFixed(2)}`
@@ -304,6 +320,7 @@ export function registerSmartTools(server: McpServer, clover: CloverClient) {
       const result: Record<string, any> = {
         snapshot: `${dayName} as of ${timeStr}`,
         revenueToNow: `$${(todayRev / 100).toFixed(2)}`,
+        revenueNote: "gross, includes tax",
         vsLastWeek: vsLastWeek !== null ? `${Number(vsLastWeek) >= 0 ? "+" : ""}${vsLastWeek}%` : "N/A",
         vs4WeekAvg: vsAvg !== null ? `${Number(vsAvg) >= 0 ? "+" : ""}${vsAvg}%` : "N/A",
         ordersToNow: todayOrders.length,
@@ -396,18 +413,28 @@ export function registerSmartTools(server: McpServer, clover: CloverClient) {
         return { content: [{ type: "text", text: `DRY RUN: Would log waste for ${items.length} items. Set confirm=true to apply.` }] };
       }
       const results = [];
+      const failed: { itemId: string; error: string }[] = [];
       for (const item of items) {
-        const current = await clover.get<any>(clover.v3(`/item_stocks/${item.itemId}`));
-        const newQty = Math.max(0, (current.quantity ?? 0) - item.quantity);
-        await clover.post<any>(clover.v3(`/item_stocks/${item.itemId}`), { quantity: newQty });
-        results.push({
-          itemId: item.itemId,
-          wasted: item.quantity,
-          reason: item.reason ?? "unspecified",
-          newStock: newQty,
-        });
+        try {
+          const current = await clover.get<any>(clover.v3(`/item_stocks/${item.itemId}`));
+          const newQty = Math.max(0, (current.quantity ?? 0) - item.quantity);
+          await clover.post<any>(clover.v3(`/item_stocks/${item.itemId}`), { quantity: newQty });
+          results.push({
+            itemId: item.itemId,
+            wasted: item.quantity,
+            reason: item.reason ?? "unspecified",
+            newStock: newQty,
+          });
+        } catch (err) {
+          failed.push({ itemId: item.itemId, error: err instanceof Error ? err.message : String(err) });
+        }
       }
-      return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+      const out: Record<string, unknown> = { logged: results };
+      if (failed.length > 0) out.failed = failed;
+      return {
+        content: [{ type: "text", text: JSON.stringify(out, null, 2) }],
+        ...(failed.length > 0 ? { isError: true } : {}),
+      };
     }
   );
 }

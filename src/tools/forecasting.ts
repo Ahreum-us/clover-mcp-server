@@ -23,9 +23,11 @@ export function registerForecastingTools(server: McpServer, clover: CloverClient
       });
 
       const byDow: Record<number, { orders: number; revenueCents: number; weeks: Set<string> }> = {};
-      const byHour: Record<number, { orders: number; count: number }> = {};
+      // F8 fix: track distinct DAYS per hour, not a counter that increments
+      // in lockstep with orders (which made avgOrders always 1.0).
+      const byHour: Record<number, { orders: number; days: Set<string> }> = {};
       for (let i = 0; i < 7; i++) byDow[i] = { orders: 0, revenueCents: 0, weeks: new Set() };
-      for (let i = 0; i < 24; i++) byHour[i] = { orders: 0, count: 0 };
+      for (let i = 0; i < 24; i++) byHour[i] = { orders: 0, days: new Set() };
 
       for (const order of orders) {
         const d = new Date((order as any).createdTime);
@@ -37,7 +39,7 @@ export function registerForecastingTools(server: McpServer, clover: CloverClient
         byDow[dow].revenueCents += (order as any).total ?? 0;
         byDow[dow].weeks.add(weekKey);
         byHour[hour].orders++;
-        byHour[hour].count++;
+        byHour[hour].days.add(d.toDateString());
       }
 
       const dowAverages = Object.entries(byDow).map(([day, v]) => {
@@ -54,7 +56,7 @@ export function registerForecastingTools(server: McpServer, clover: CloverClient
         .filter(([, v]) => v.orders > 0)
         .map(([hour, v]) => ({
           hour: `${hour}:00`,
-          avgOrders: (v.orders / (v.count || 1)).toFixed(1),
+          avgOrders: (v.orders / (v.days.size || 1)).toFixed(1),
           totalOrders: v.orders,
         }))
         .sort((a, b) => b.totalOrders - a.totalOrders)

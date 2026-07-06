@@ -1,9 +1,12 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { CloverClient } from "../clover-client.js";
+import { tool } from "../tool-wrapper.js";
+import { CLOVER_ID } from "../lib/ids.js";
 
 export function registerInventoryTools(server: McpServer, clover: CloverClient) {
-  server.tool(
+  tool(
+    server,
     "get_inventory_levels",
     "Get current stock levels for all tracked inventory items",
     {},
@@ -15,11 +18,12 @@ export function registerInventoryTools(server: McpServer, clover: CloverClient) 
     }
   );
 
-  server.tool(
+  tool(
+    server,
     "check_low_stock",
     "Find items below a stock threshold. Returns items that need reordering.",
     {
-      threshold: z.number().optional().default(5).describe("Warn when quantity is at or below this number"),
+      threshold: z.number().nonnegative().max(1_000_000).optional().default(5).describe("Warn when quantity is at or below this number"),
     },
     async ({ threshold }) => {
       const elements = await clover.getAll(clover.v3("/item_stocks"), {
@@ -43,12 +47,13 @@ export function registerInventoryTools(server: McpServer, clover: CloverClient) 
     }
   );
 
-  server.tool(
+  tool(
+    server,
     "update_inventory",
     "Update stock quantity for an item (e.g. after receiving a delivery)",
     {
-      itemId: z.string().describe("Clover item ID"),
-      quantity: z.number().describe("New stock quantity"),
+      itemId: CLOVER_ID.describe("Clover item ID"),
+      quantity: z.number().int().nonnegative().max(1_000_000).describe("New stock quantity"),
       confirm: z.boolean().optional().default(false).describe("Must be true to apply changes"),
       note: z.string().optional().describe("e.g. 'Received delivery from supplier'"),
     },
@@ -63,12 +68,13 @@ export function registerInventoryTools(server: McpServer, clover: CloverClient) 
     }
   );
 
-  server.tool(
+  tool(
+    server,
     "adjust_inventory",
     "Adjust stock by a delta (positive = add, negative = remove). Use for waste tracking or corrections.",
     {
-      itemId: z.string().describe("Clover item ID"),
-      delta: z.number().describe("Amount to add (positive) or remove (negative)"),
+      itemId: CLOVER_ID.describe("Clover item ID"),
+      delta: z.number().int().min(-1_000_000).max(1_000_000).describe("Amount to add (positive) or remove (negative)"),
       confirm: z.boolean().optional().default(false).describe("Must be true to apply changes"),
       reason: z.string().optional().describe("e.g. 'waste', 'spillage', 'delivery'"),
     },
@@ -96,7 +102,8 @@ export function registerInventoryTools(server: McpServer, clover: CloverClient) 
     }
   );
 
-  server.tool(
+  tool(
+    server,
     "auto_86_depleted_items",
     "Scan inventory and automatically hide any items with zero stock from the menu",
     {
@@ -115,22 +122,41 @@ export function registerInventoryTools(server: McpServer, clover: CloverClient) 
         return { content: [{ type: "text", text: "No depleted items found. Nothing to 86." }] };
       }
 
-      const results: string[] = depleted.map(s => s.item?.name ?? s.item?.id).filter(Boolean);
+      const names: string[] = depleted.map((s: any) => s.item?.name ?? s.item?.id).filter(Boolean);
 
       if (!confirm) {
-        return { content: [{ type: "text", text: `DRY RUN: Would auto-86 ${results.length} item(s): ${results.join(", ")}. Set confirm=true to apply.` }] };
+        return { content: [{ type: "text", text: `DRY RUN: Would auto-86 ${names.length} item(s): ${names.join(", ")}. Set confirm=true to apply.` }] };
       }
 
+      // F5 fix: collect per-item failures instead of aborting mid-loop, so a
+      // failed write can't leave some items hidden with no report of which.
+      const hidden: string[] = [];
+      const failed: { item: string; error: string }[] = [];
       for (const s of depleted) {
-        if (!s.item?.id) continue;
-        await clover.post<any>(clover.v3(`/items/${s.item.id}`), { hidden: true });
+        const item = (s as any).item;
+        if (!item?.id) continue;
+        try {
+          await clover.post<any>(clover.v3(`/items/${item.id}`), { hidden: true });
+          hidden.push(item.name ?? item.id);
+        } catch (err) {
+          failed.push({
+            item: item.name ?? item.id,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
 
+      const summary: Record<string, unknown> = {
+        autoEightySixed: hidden.length,
+        items: hidden,
+      };
+      if (failed.length > 0) {
+        summary.warning = `${failed.length} item(s) FAILED to hide — still visible on the menu. Retry these.`;
+        summary.failed = failed;
+      }
       return {
-        content: [{
-          type: "text",
-          text: `Auto-86'd ${results.length} item(s): ${results.join(", ")}`,
-        }],
+        content: [{ type: "text", text: JSON.stringify(summary, null, 2) }],
+        ...(failed.length > 0 ? { isError: true } : {}),
       };
     }
   );

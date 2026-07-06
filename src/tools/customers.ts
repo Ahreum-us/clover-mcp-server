@@ -1,21 +1,25 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { CloverClient } from "../clover-client.js";
+import { tool } from "../tool-wrapper.js";
+import { CLOVER_ID } from "../lib/ids.js";
 
 export function registerCustomerTools(server: McpServer, clover: CloverClient) {
-  server.tool(
+  tool(
+    server,
     "search_customer",
     "Search for a customer by name, phone, or email",
-    { query: z.string().describe("Name, phone number, or email to search") },
+    { query: z.string().min(1).max(200).describe("Name, phone number, or email to search") },
     async ({ query }) => {
       // Strip characters that have special meaning in Clover filter syntax
       const safeQuery = query.replace(/[~=&<>()`]/g, "").trim().toLowerCase();
-      // Clover's customers endpoint doesn't support substring filters — fetch and match client-side
-      const data = await clover.get<any>(clover.v3("/customers"), {
+      // Clover's customers endpoint doesn't support substring filters — fetch
+      // and match client-side. F4 fix: getAll so customers beyond the first
+      // 200 are searchable.
+      const customers = await clover.getAll<any>(clover.v3("/customers"), {
         expand: "addresses,emailAddresses,phoneNumbers",
-        limit: 200,
       });
-      const elements = (data.elements ?? []).filter((c: any) => {
+      const elements = customers.filter((c: any) => {
         const fullName = `${c.firstName ?? ""} ${c.lastName ?? ""}`.toLowerCase();
         const phone = c.phoneNumbers?.elements?.[0]?.phoneNumber ?? "";
         const email = c.emailAddresses?.elements?.[0]?.emailAddress?.toLowerCase() ?? "";
@@ -25,10 +29,11 @@ export function registerCustomerTools(server: McpServer, clover: CloverClient) {
     }
   );
 
-  server.tool(
+  tool(
+    server,
     "get_customer",
     "Get full profile and order history for a customer",
-    { customerId: z.string() },
+    { customerId: CLOVER_ID },
     async ({ customerId }) => {
       const [profile, orders] = await Promise.all([
         clover.get<any>(clover.v3(`/customers/${customerId}`), {
@@ -52,6 +57,7 @@ export function registerCustomerTools(server: McpServer, clover: CloverClient) {
             orderCount: orders.elements?.length ?? 0,
             totalSpendCents: totalSpend,
             totalSpendDollars: (totalSpend / 100).toFixed(2),
+            spendNote: "totalSpend covers the 50 most recent orders",
             recentOrders: orders.elements?.slice(0, 10),
           }, null, 2),
         }],
@@ -59,15 +65,16 @@ export function registerCustomerTools(server: McpServer, clover: CloverClient) {
     }
   );
 
-  server.tool(
+  tool(
+    server,
     "create_customer",
     "Add a new customer to Clover (e.g. when taking a reservation or catering inquiry)",
     {
-      firstName: z.string(),
-      lastName: z.string().optional(),
-      phone: z.string().optional(),
-      email: z.string().optional(),
-      note: z.string().optional().describe("Internal note e.g. 'regular, likes extra basil'"),
+      firstName: z.string().min(1).max(100),
+      lastName: z.string().max(100).optional(),
+      phone: z.string().max(50).optional(),
+      email: z.string().email("must be a valid email address").max(200).optional(),
+      note: z.string().max(1000).optional().describe("Internal note e.g. 'regular, likes extra basil'"),
     },
     async ({ firstName, lastName, phone, email, note }) => {
       const body: Record<string, unknown> = { firstName };
@@ -80,26 +87,28 @@ export function registerCustomerTools(server: McpServer, clover: CloverClient) {
     }
   );
 
-  server.tool(
+  tool(
+    server,
     "get_vip_customers",
     "Identify top customers by spend or visit frequency — useful for loyalty outreach",
     {
-      topN: z.number().optional().default(10).describe("How many top customers to return"),
-      minOrders: z.number().optional().default(3).describe("Minimum number of visits"),
+      topN: z.number().int().positive().max(100).optional().default(10).describe("How many top customers to return"),
+      minOrders: z.number().int().positive().max(1000).optional().default(3).describe("Minimum number of visits"),
     },
     async ({ topN, minOrders }) => {
-      // 90-day window keeps the result set manageable and reflects current loyalty
+      // 90-day window keeps the result set manageable and reflects current loyalty.
+      // F4 fix: getAll — busy merchants exceed 500 PAID orders in 90 days and
+      // the old get(limit:500) computed VIP rankings from an arbitrary slice.
       const since = Date.now() - 90 * 24 * 60 * 60 * 1000;
-      const orders = await clover.get<any>(clover.v3("/orders"), {
+      const orders = await clover.getAll<any>(clover.v3("/orders"), {
         expand: "customers",
         filter: [`paymentState=PAID`, `createdTime>=${since}`],
-        limit: 500,
         orderBy: "createdTime DESC",
       });
 
       const customerMap: Record<string, { name: string; orders: number; totalCents: number }> = {};
-      for (const order of orders.elements ?? []) {
-        const customer = order.customers?.elements?.[0];
+      for (const order of orders) {
+        const customer = (order as any).customers?.elements?.[0];
         if (!customer?.id) continue;
         if (!customerMap[customer.id]) {
           customerMap[customer.id] = {
@@ -109,7 +118,7 @@ export function registerCustomerTools(server: McpServer, clover: CloverClient) {
           };
         }
         customerMap[customer.id].orders++;
-        customerMap[customer.id].totalCents += order.total ?? 0;
+        customerMap[customer.id].totalCents += (order as any).total ?? 0;
       }
 
       const ranked = Object.entries(customerMap)

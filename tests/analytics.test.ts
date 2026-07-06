@@ -1,6 +1,6 @@
 import { CloverClient } from "../src/clover-client.js";
 import { registerAnalyticsTools } from "../src/tools/analytics.js";
-import { resolvePeriod, parseDate } from "../src/lib/date.js";
+import { resolvePeriod, parseDate, parseEndDate } from "../src/lib/date.js";
 
 jest.mock("../src/clover-client.js");
 
@@ -82,10 +82,17 @@ describe("resolvePeriod", () => {
     ).toThrow(/before startDate/);
   });
 
-  test("custom parses ISO dates to inclusive bounds", () => {
+  test("custom end date is inclusive of the whole end day (F2 fix)", () => {
     const r = resolvePeriod("custom", "2026-06-01", "2026-06-05");
     expect(r.startMs).toBe(Date.parse("2026-06-01"));
-    expect(r.endMs).toBe(Date.parse("2026-06-05"));
+    // Pre-fix this was midnight STARTING June 5, silently excluding the
+    // final day of the range from tax reports and order lookups.
+    expect(r.endMs).toBe(Date.parse("2026-06-05") + 24 * 60 * 60 * 1000 - 1);
+  });
+
+  test("custom end with explicit timestamp is honored exactly", () => {
+    const r = resolvePeriod("custom", "2026-06-01", "2026-06-05T14:30:00Z");
+    expect(r.endMs).toBe(Date.parse("2026-06-05T14:30:00Z"));
   });
 
   test("today ends at now (within a few ms)", () => {
@@ -99,6 +106,22 @@ describe("resolvePeriod", () => {
   test("week is exactly 7 days back", () => {
     const r = resolvePeriod("week");
     expect(r.endMs - r.startMs).toBeCloseTo(7 * 24 * 60 * 60 * 1000, -3);
+  });
+});
+
+describe("parseEndDate", () => {
+  test("bare date extends to end of day", () => {
+    expect(parseEndDate("2026-06-05", "f")).toBe(
+      Date.parse("2026-06-05") + 24 * 60 * 60 * 1000 - 1
+    );
+  });
+
+  test("explicit timestamp is unchanged", () => {
+    expect(parseEndDate("2026-06-05T14:30:00Z", "f")).toBe(Date.parse("2026-06-05T14:30:00Z"));
+  });
+
+  test("rejects garbage with field name", () => {
+    expect(() => parseEndDate("nope", "endDate")).toThrow(/endDate/);
   });
 });
 

@@ -8,15 +8,17 @@ export function registerFinancialTools(server: McpServer, clover: CloverClient) 
   tool(
     server,
     "get_tips_report",
-    "Tips breakdown by employee for a period. Essential for payroll and IRS reporting.",
+    "Tips breakdown by employee for a period. Essential for payroll and IRS reporting. Note: tips are attributed to the ORDER's employee; if a different employee closed the payment, attribution follows the order owner.",
     {
       period: z.enum(["today", "yesterday", "week", "month"]).optional().default("week"),
     },
     async ({ period }) => {
-      const { startMs } = resolvePeriod(period);
+      // F1 fix: bound BOTH ends. "yesterday" previously included today's
+      // orders because only the start bound was applied.
+      const { startMs, endMs } = resolvePeriod(period);
 
       const orders = await clover.getAll(clover.v3("/orders"), {
-        filter: [`createdTime>=${startMs}`, "paymentState=PAID"],
+        filter: [`createdTime>=${startMs}`, `createdTime<=${endMs}`, "paymentState=PAID"],
         expand: "payments,employee",
       });
 

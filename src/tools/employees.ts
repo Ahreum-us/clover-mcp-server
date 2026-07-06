@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { CloverClient } from "../clover-client.js";
 import { tool } from "../tool-wrapper.js";
-import { parseDate, resolvePeriod } from "../lib/date.js";
+import { parseDate, parseEndDate, resolvePeriod } from "../lib/date.js";
 
 export function registerEmployeeTools(server: McpServer, clover: CloverClient) {
   tool(
@@ -26,7 +26,7 @@ export function registerEmployeeTools(server: McpServer, clover: CloverClient) {
     },
     async ({ startDate, endDate }) => {
       const start = parseDate(startDate, "startDate");
-      const end = endDate ? parseDate(endDate, "endDate") : Date.now();
+      const end = endDate ? parseEndDate(endDate, "endDate") : Date.now();
       if (end < start) throw new Error(`endDate is before startDate.`);
 
       const shifts = await clover.getAll(clover.v3("/shifts"), {

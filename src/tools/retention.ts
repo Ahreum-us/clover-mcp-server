@@ -141,13 +141,14 @@ export function registerRetentionTools(server: McpServer, clover: CloverClient) 
     },
     async ({ month }) => {
       const targetMonth = month ?? new Date().getMonth() + 1;
-      const customers = await clover.get<any>(clover.v3("/customers"), {
+      // F4 fix: getAll instead of get(limit:500) — merchants with >500
+      // customers silently missed birthdays past the cap.
+      const customers = await clover.getAll<any>(clover.v3("/customers"), {
         expand: "phoneNumbers,emailAddresses",
-        limit: 500,
       });
 
       const birthdayPattern = /b(?:irth)?(?:day)?[:\s]+(\d{1,2})[\/\-](\d{1,2})/i;
-      const matches = (customers.elements ?? []).filter((c: any) => {
+      const matches = customers.filter((c: any) => {
         if (!c.note) return false;
         const m = c.note.match(birthdayPattern);
         if (!m) return false;
@@ -185,7 +186,8 @@ export function registerRetentionTools(server: McpServer, clover: CloverClient) 
       period: z.enum(["today", "yesterday", "week"]).optional().default("week"),
     },
     async ({ period }) => {
-      const { startMs } = resolvePeriod(period);
+      // F1 fix: use both bounds so "yesterday" excludes first visits today.
+      const { startMs, endMs } = resolvePeriod(period);
 
       // 2-year lookback to compute "first visit" accurately. Migrated to
       // getAll so high-volume merchants don't silently miss returning customers.
@@ -207,7 +209,7 @@ export function registerRetentionTools(server: McpServer, clover: CloverClient) 
       const newCustomers = allOrders
         .filter((o: any) => {
           const c = o.customers?.elements?.[0];
-          return c?.id && firstVisit[c.id] >= startMs;
+          return c?.id && firstVisit[c.id] >= startMs && firstVisit[c.id] <= endMs;
         })
         .map((o: any) => {
           const c = o.customers.elements[0];

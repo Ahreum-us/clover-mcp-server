@@ -1,4 +1,3 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CloverClient } from "../src/clover-client.js";
 import { registerInventoryTools } from "../src/tools/inventory.js";
 
@@ -54,18 +53,23 @@ describe("adjust_inventory", () => {
     expect(result.content[0].text).toContain("10 → 7");
   });
 
+  // F12: inventory tools now go through the tool() wrapper, which converts
+  // thrown errors into isError results (preserving CloverApiError context).
+  // These tests assert the wrapped shape instead of a raw throw.
   test("rejects adjustment that would go negative", async () => {
     (mockClover.get as jest.Mock).mockResolvedValue({ quantity: 2 });
-    await expect(
-      server.tools["adjust_inventory"]({ itemId: "item1", delta: -5, confirm: true })
-    ).rejects.toThrow(/negative stock/);
+    const result = await server.tools["adjust_inventory"]({ itemId: "item1", delta: -5, confirm: true });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/negative stock/);
+    expect(mockClover.post).not.toHaveBeenCalled();
   });
 
   test("rejects item with no tracked quantity", async () => {
     (mockClover.get as jest.Mock).mockResolvedValue({});
-    await expect(
-      server.tools["adjust_inventory"]({ itemId: "item1", delta: 1, confirm: true })
-    ).rejects.toThrow(/no tracked stock quantity/);
+    const result = await server.tools["adjust_inventory"]({ itemId: "item1", delta: 1, confirm: true });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/no tracked stock quantity/);
+    expect(mockClover.post).not.toHaveBeenCalled();
   });
 });
 
