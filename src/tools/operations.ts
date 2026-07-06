@@ -5,6 +5,7 @@ import { join } from "path";
 import { CloverClient } from "../clover-client.js";
 import { tool } from "../tool-wrapper.js";
 import { resolvePeriod, parseDate } from "../lib/date.js";
+import { collectSettled } from "../lib/settled.js";
 
 const CLOVER_ID = z.string().regex(/^[A-Z0-9]+$/i, "must be alphanumeric").max(40);
 
@@ -108,15 +109,9 @@ export function registerOperationsTools(server: McpServer, clover: CloverClient)
           return { name: item.name, oldPrice: `$${(oldPrice / 100).toFixed(2)}`, newPrice: `$${(roundedCents / 100).toFixed(2)}` };
         })
       );
-      const changes: any[] = [];
-      const failed: { item: string; error: string }[] = [];
-      settled.forEach((r, i) => {
-        if (r.status === "fulfilled") changes.push(r.value);
-        else failed.push({
-          item: (elements[i] as any)?.name ?? (elements[i] as any)?.id ?? "unknown",
-          error: r.reason instanceof Error ? r.reason.message : String(r.reason),
-        });
-      });
+      // CodeRabbit (PR #35/#37): stable IDs in failures, via the shared
+      // collector so the shape can't drift across tools again.
+      const { succeeded: changes, failed } = collectSettled(settled, elements as any[]);
 
       return {
         content: [{
@@ -225,15 +220,8 @@ export function registerOperationsTools(server: McpServer, clover: CloverClient)
           return { name: item.name, original: `$${(original / 100).toFixed(2)}`, happyHour: `$${(discounted / 100).toFixed(2)}` };
         })
       );
-      const results: any[] = [];
-      const applyFailed: { item: string; error: string }[] = [];
-      settledApply.forEach((r, i) => {
-        if (r.status === "fulfilled") results.push(r.value);
-        else applyFailed.push({
-          item: (elements[i] as any)?.name ?? (elements[i] as any)?.id ?? "unknown",
-          error: r.reason instanceof Error ? r.reason.message : String(r.reason),
-        });
-      });
+      const { succeeded: results, failed: applyFailed } =
+        collectSettled(settledApply, elements as any[]);
 
       return {
         content: [{

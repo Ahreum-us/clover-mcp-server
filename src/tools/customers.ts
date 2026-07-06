@@ -24,8 +24,21 @@ export function registerCustomerTools(server: McpServer, clover: CloverClient) {
         const phone = c.phoneNumbers?.elements?.[0]?.phoneNumber ?? "";
         const email = c.emailAddresses?.elements?.[0]?.emailAddress?.toLowerCase() ?? "";
         return fullName.includes(safeQuery) || phone.includes(safeQuery) || email.includes(safeQuery);
-      }).slice(0, 20);
-      return { content: [{ type: "text", text: JSON.stringify(elements, null, 2) }] };
+      });
+      // CodeRabbit (PR #35): surface truncation instead of silently capping —
+      // the same "hidden truncation" failure mode F4 removes elsewhere.
+      const truncated = elements.length > 20;
+      const results = elements.slice(0, 20);
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            matchCount: elements.length,
+            ...(truncated ? { note: "Showing first 20 of " + elements.length + " matches — refine the query to narrow results." } : {}),
+            results,
+          }, null, 2),
+        }],
+      };
     }
   );
 
@@ -41,7 +54,10 @@ export function registerCustomerTools(server: McpServer, clover: CloverClient) {
         }),
         clover.get<any>(clover.v3("/orders"), {
           filter: `customers.id=${customerId}`,
-          expand: "lineItems,payments",
+          // CodeRabbit (PR #37): payments expand dropped — the slim projection
+          // never reads payment fields, and expanded payment data can carry
+          // card/tender PII we have no reason to pull.
+          expand: "lineItems",
           limit: 50,
           orderBy: "createdTime DESC",
         }),
@@ -58,7 +74,16 @@ export function registerCustomerTools(server: McpServer, clover: CloverClient) {
             totalSpendCents: totalSpend,
             totalSpendDollars: (totalSpend / 100).toFixed(2),
             spendNote: "totalSpend covers the 50 most recent orders",
-            recentOrders: orders.elements?.slice(0, 10),
+            // Slim projection (CodeRabbit, PR #35): full expanded order objects
+            // (payments, line-item internals) are excess PII for an LLM-facing
+            // summary. Keep only what the summary needs.
+            recentOrders: (orders.elements ?? []).slice(0, 10).map((o: any) => ({
+              id: o.id,
+              createdAt: o.createdTime ? new Date(o.createdTime).toISOString() : null,
+              total: `$${((o.total ?? 0) / 100).toFixed(2)}`,
+              state: o.state ?? null,
+              items: (o.lineItems?.elements ?? []).map((li: any) => li.name).filter(Boolean),
+            })),
           }, null, 2),
         }],
       };

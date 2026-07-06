@@ -133,8 +133,18 @@ export function registerInventoryTools(server: McpServer, clover: CloverClient) 
       const hidden: string[] = [];
       const failed: { item: string; error: string }[] = [];
       for (const s of depleted) {
-        const item = (s as any).item;
-        if (!item?.id) continue;
+        const stock = s as any;
+        const item = stock.item;
+        // CodeRabbit (PR #35): a depleted row without an expanded item ID used
+        // to be silently skipped — the tool could report success while that
+        // item stayed visible with no retry target. Surface it as a failure.
+        if (!item?.id) {
+          failed.push({
+            item: item?.name ?? stock.id ?? "unknown item stock",
+            error: "Missing expanded item ID; cannot hide menu item.",
+          });
+          continue;
+        }
         try {
           await clover.post<any>(clover.v3(`/items/${item.id}`), { hidden: true });
           hidden.push(item.name ?? item.id);

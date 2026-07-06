@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { CloverClient } from "../clover-client.js";
 import { tool } from "../tool-wrapper.js";
+import { collectSettled } from "../lib/settled.js";
 
 const CLOVER_ID = z.string().regex(/^[A-Z0-9]+$/i, "must be alphanumeric").max(40);
 
@@ -152,15 +153,7 @@ export function registerMenuOpsTools(server: McpServer, clover: CloverClient) {
           return item.name as string;
         })
       );
-      const updated: string[] = [];
-      const failed: { item: string; error: string }[] = [];
-      settled.forEach((r, i) => {
-        if (r.status === "fulfilled") updated.push(r.value);
-        else failed.push({
-          item: items[i]?.name ?? items[i]?.id ?? "unknown",
-          error: r.reason instanceof Error ? r.reason.message : String(r.reason),
-        });
-      });
+      const { succeeded: updated, failed } = collectSettled(settled, items);
 
       return {
         content: [{
