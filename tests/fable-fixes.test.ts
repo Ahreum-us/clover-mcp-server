@@ -11,6 +11,17 @@ import { mkdtempSync, rmSync } from "fs";
 import { join } from "path";
 
 jest.mock("../src/clover-client.js");
+import { _resetConfirmations } from "../src/lib/confirm.js";
+
+// Batch 4: mutations now use the two-call token gate. This helper runs the
+// request call, extracts the token, and returns it for the confirm call.
+async function getToken(fn: Function, args: Record<string, unknown>): Promise<string> {
+  const first = await fn(args);
+  const m = /confirmationToken="([^"]+)"/.exec(first.content[0].text);
+  if (!m) throw new Error("no confirmation token in: " + first.content[0].text);
+  return m[1];
+}
+
 
 function makeServer() {
   const tools: Record<string, Function> = {};
@@ -23,6 +34,7 @@ function makeServer() {
 }
 
 const mockClover = {
+  merchantId: "TEST",
   v3: (path: string) => `/v3/merchants/TEST${path}`,
   get: jest.fn(),
   getAll: jest.fn(),
@@ -34,6 +46,7 @@ describe("F1: 'yesterday' periods are bounded on BOTH ends", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    _resetConfirmations();
     server = makeServer();
     registerFinancialTools(server, mockClover);
   });
@@ -57,6 +70,7 @@ describe("F3: allergen tags exclude items from '-free' dietary searches", () => 
 
   beforeEach(() => {
     jest.clearAllMocks();
+    _resetConfirmations();
     server = makeServer();
     registerMenuOpsTools(server, mockClover);
   });
@@ -84,6 +98,7 @@ describe("F7: catering quote does not guess between ambiguous items", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    _resetConfirmations();
     server = makeServer();
     registerSmartTools(server, mockClover);
   });
@@ -130,6 +145,7 @@ describe("F1 (extended per CodeRabbit): delivery orders bounded on both ends", (
 
   beforeEach(() => {
     jest.clearAllMocks();
+    _resetConfirmations();
     server = makeServer();
     registerOrderTools(server, mockClover);
   });
@@ -151,6 +167,7 @@ describe("CodeRabbit follow-up: auto_86 surfaces rows with missing item IDs", ()
 
   beforeEach(() => {
     jest.clearAllMocks();
+    _resetConfirmations();
     server = makeServer();
     registerInventoryTools(server, mockClover);
   });
@@ -161,7 +178,8 @@ describe("CodeRabbit follow-up: auto_86 surfaces rows with missing item IDs", ()
       { quantity: 0, item: { id: "OK1", name: "Hidden Fine" } },   // hides OK
     ]);
     (mockClover.post as jest.Mock).mockResolvedValue({});
-    const result = await server.tools["auto_86_depleted_items"]({ confirm: true });
+    const token = await getToken(server.tools["auto_86_depleted_items"], {});
+    const result = await server.tools["auto_86_depleted_items"]({ confirmationToken: token });
     const parsed = JSON.parse(result.content[0].text);
     expect(result.isError).toBe(true);
     expect(parsed.autoEightySixed).toBe(1);
@@ -176,6 +194,7 @@ describe("CodeRabbit follow-up: customer search surfaces truncation", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    _resetConfirmations();
     server = makeServer();
     registerCustomerTools(server, mockClover);
   });
@@ -209,6 +228,7 @@ describe("CodeRabbit #37: unified { itemId, itemName, error } failure shape", ()
 
   beforeEach(() => {
     jest.clearAllMocks();
+    _resetConfirmations();
     server = makeServer();
     registerMenuOpsTools(server, mockClover);
     registerOperationsTools(server, mockClover);
@@ -255,7 +275,8 @@ describe("CodeRabbit #37: unified { itemId, itemName, error } failure shape", ()
       .mockResolvedValueOnce({})
       .mockRejectedValueOnce(new Error("nope"));
     const result = await server.tools["bulk_update_prices"]({
-      categoryId: "CAT1", changePercent: 10, roundToNearest: 0.05, confirm: true,
+      categoryId: "CAT1", changePercent: 10, roundToNearest: 0.05,
+      confirmationToken: await getToken(server.tools["bulk_update_prices"], { categoryId: "CAT1", changePercent: 10, roundToNearest: 0.05 }),
     });
     const parsed = JSON.parse(result.content[0].text);
     expect(result.isError).toBe(true);
@@ -271,7 +292,8 @@ describe("CodeRabbit #37: unified { itemId, itemName, error } failure shape", ()
       .mockResolvedValueOnce({})
       .mockRejectedValueOnce(new Error("nope"));
     const result = await server.tools["set_happy_hour_prices"]({
-      categoryId: "CAT2", discountPercent: 20, restore: false, confirm: true,
+      categoryId: "CAT2", discountPercent: 20, restore: false,
+      confirmationToken: await getToken(server.tools["set_happy_hour_prices"], { categoryId: "CAT2", discountPercent: 20, restore: false }),
     });
     const parsed = JSON.parse(result.content[0].text);
     expect(result.isError).toBe(true);

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { CloverClient } from "../clover-client.js";
 import { tool } from "../tool-wrapper.js";
 import { CLOVER_ID } from "../lib/ids.js";
+import { requestConfirmation, consumeConfirmation } from "../lib/confirm.js";
 
 // $100,000.00 ceiling — far above any real menu item, but blocks an agent from
 // fat-fingering a price into the millions, or sending a negative/float/NaN.
@@ -80,30 +81,25 @@ export function registerMenuTools(server: McpServer, clover: CloverClient) {
   tool(
     server,
     "update_item_price",
-    "Update the price of a menu item. Returns a dry-run preview unless confirm=true.",
+    "Update the price of a menu item. Returns a confirmation request (with a preview and single-use token) unless a valid confirmationToken is provided.",
     {
       itemId: CLOVER_ID.describe("Clover item ID"),
       priceCents: PRICE_CENTS.describe("New price in cents (e.g. 1299 = $12.99)"),
-      confirm: z.boolean().optional().default(false).describe("Must be true to apply the change"),
+      confirmationToken: z.string().optional().describe("Token from the prior confirmation step"),
     },
-    async ({ itemId, priceCents, confirm }) => {
-      if (!confirm) {
-        // Fetch current price so the preview shows a real before/after.
+    async ({ itemId, priceCents, confirmationToken }) => {
+      const gateArgs = { itemId, priceCents };
+      if (!confirmationToken) {
+        // Fetch current price so the confirmation shows a real before/after.
         const current = await clover.get<any>(clover.v3(`/items/${itemId}`));
         const oldPrice = current?.price ?? null;
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              status: "DRY_RUN",
-              itemId,
-              itemName: current?.name ?? null,
-              currentPrice: oldPrice === null ? "unknown" : `$${(oldPrice / 100).toFixed(2)}`,
-              newPrice: `$${(priceCents / 100).toFixed(2)}`,
-              message: "Set confirm=true to apply this price change.",
-            }, null, 2),
-          }],
-        };
+        return requestConfirmation(clover.merchantId, "update_item_price", gateArgs,
+          `Change price of ${current?.name ?? itemId} from ` +
+          `${oldPrice === null ? "unknown" : `$${(oldPrice / 100).toFixed(2)}`} to $${(priceCents / 100).toFixed(2)}.`);
+      }
+      const gate = consumeConfirmation(clover.merchantId, "update_item_price", gateArgs, confirmationToken);
+      if (!gate.ok) {
+        throw new Error(`Price change NOT executed: ${gate.reason}`);
       }
       await clover.post<any>(clover.v3(`/items/${itemId}`), { price: priceCents });
       return {

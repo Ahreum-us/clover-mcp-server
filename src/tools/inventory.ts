@@ -3,6 +3,7 @@ import { z } from "zod";
 import { CloverClient } from "../clover-client.js";
 import { tool } from "../tool-wrapper.js";
 import { CLOVER_ID } from "../lib/ids.js";
+import { requestConfirmation, consumeConfirmation } from "../lib/confirm.js";
 
 export function registerInventoryTools(server: McpServer, clover: CloverClient) {
   tool(
@@ -54,16 +55,22 @@ export function registerInventoryTools(server: McpServer, clover: CloverClient) 
     {
       itemId: CLOVER_ID.describe("Clover item ID"),
       quantity: z.number().int().nonnegative().max(1_000_000).describe("New stock quantity"),
-      confirm: z.boolean().optional().default(false).describe("Must be true to apply changes"),
+      confirmationToken: z.string().optional().describe("Token from the prior confirmation step"),
       note: z.string().optional().describe("e.g. 'Received delivery from supplier'"),
     },
-    async ({ itemId, quantity, confirm }) => {
-      if (!confirm) {
-        return { content: [{ type: "text", text: `DRY RUN: Would update stock for item ${itemId} to ${quantity}. Set confirm=true to apply.` }] };
+    async ({ itemId, quantity, confirmationToken, note }) => {
+      const gateArgs = { itemId, quantity };
+      if (!confirmationToken) {
+        return requestConfirmation(clover.merchantId, "update_inventory", gateArgs,
+          `Update stock for item ${itemId} to ${quantity}.${note ? ` Note: ${note}` : ""}`);
+      }
+      const gate = consumeConfirmation(clover.merchantId, "update_inventory", gateArgs, confirmationToken);
+      if (!gate.ok) {
+        throw new Error(`Stock update NOT executed: ${gate.reason}`);
       }
       await clover.post<any>(clover.v3(`/item_stocks/${itemId}`), { quantity });
       return {
-        content: [{ type: "text", text: `Stock for item ${itemId} updated to ${quantity}.` }],
+        content: [{ type: "text", text: `Stock for item ${itemId} updated to ${quantity}.${note ? ` Note: ${note}` : ""}` }],
       };
     }
   );
@@ -75,10 +82,10 @@ export function registerInventoryTools(server: McpServer, clover: CloverClient) 
     {
       itemId: CLOVER_ID.describe("Clover item ID"),
       delta: z.number().int().min(-1_000_000).max(1_000_000).describe("Amount to add (positive) or remove (negative)"),
-      confirm: z.boolean().optional().default(false).describe("Must be true to apply changes"),
+      confirmationToken: z.string().optional().describe("Token from the prior confirmation step"),
       reason: z.string().optional().describe("e.g. 'waste', 'spillage', 'delivery'"),
     },
-    async ({ itemId, delta, confirm, reason }) => {
+    async ({ itemId, delta, confirmationToken, reason }) => {
       const current = await clover.get<any>(clover.v3(`/item_stocks/${itemId}`));
       if (current.quantity === undefined || current.quantity === null) {
         throw new Error(`Item ${itemId} has no tracked stock quantity.`);
@@ -88,8 +95,14 @@ export function registerInventoryTools(server: McpServer, clover: CloverClient) 
         throw new Error(`Adjustment would result in negative stock (${current.quantity} + ${delta} = ${newQty}). Aborting.`);
       }
 
-      if (!confirm) {
-        return { content: [{ type: "text", text: `DRY RUN: Would adjust ${itemId}: ${current.quantity} → ${newQty}${reason ? ` (${reason})` : ""}. Set confirm=true to apply.` }] };
+      const gateArgs = { itemId, delta };
+      if (!confirmationToken) {
+        return requestConfirmation(clover.merchantId, "adjust_inventory", gateArgs,
+          `Adjust ${itemId}: ${current.quantity} → ${newQty}${reason ? ` (${reason})` : ""}. The delta is re-applied to CURRENT stock at execution time.`);
+      }
+      const gate = consumeConfirmation(clover.merchantId, "adjust_inventory", gateArgs, confirmationToken);
+      if (!gate.ok) {
+        throw new Error(`Adjustment NOT executed: ${gate.reason}`);
       }
 
       await clover.post<any>(clover.v3(`/item_stocks/${itemId}`), { quantity: newQty });
@@ -107,9 +120,9 @@ export function registerInventoryTools(server: McpServer, clover: CloverClient) 
     "auto_86_depleted_items",
     "Scan inventory and automatically hide any items with zero stock from the menu",
     {
-      confirm: z.boolean().optional().default(false).describe("Must be true to apply changes"),
+      confirmationToken: z.string().optional().describe("Token from the prior confirmation step"),
     },
-    async ({ confirm }) => {
+    async ({ confirmationToken }) => {
       const elements = await clover.getAll(clover.v3("/item_stocks"), {
         expand: "item",
       });
@@ -124,8 +137,13 @@ export function registerInventoryTools(server: McpServer, clover: CloverClient) 
 
       const names: string[] = depleted.map((s: any) => s.item?.name ?? s.item?.id).filter(Boolean);
 
-      if (!confirm) {
-        return { content: [{ type: "text", text: `DRY RUN: Would auto-86 ${names.length} item(s): ${names.join(", ")}. Set confirm=true to apply.` }] };
+      if (!confirmationToken) {
+        return requestConfirmation(clover.merchantId, "auto_86_depleted_items", {},
+          `Auto-86 ${names.length} depleted item(s): ${names.join(", ")}. Inventory is RE-SCANNED at execution, so the final list reflects stock at that moment.`);
+      }
+      const gate = consumeConfirmation(clover.merchantId, "auto_86_depleted_items", {}, confirmationToken);
+      if (!gate.ok) {
+        throw new Error(`Auto-86 NOT executed: ${gate.reason}`);
       }
 
       // F5 fix: collect per-item failures instead of aborting mid-loop, so a

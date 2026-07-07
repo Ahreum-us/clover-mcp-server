@@ -4,7 +4,14 @@ import Bottleneck from "bottleneck";
 import { CloverApiError } from "./errors.js";
 
 export interface CloverConfig {
-  accessToken: string;
+  /** Static bearer token. Provide this OR tokenProvider (e.g. tests, single static creds). */
+  accessToken?: string;
+  /**
+   * Async bearer-token source, called on every request. Provide this OR accessToken.
+   * Backed by the credential resolver so a rotated token is picked up within one
+   * TTL window without restarting the process.
+   */
+  tokenProvider?: () => Promise<string>;
   merchantId: string;
   sandbox?: boolean;
 }
@@ -30,6 +37,12 @@ export class CloverClient {
   readonly merchantId: string;
 
   constructor(config: CloverConfig) {
+    if (!config.tokenProvider && !config.accessToken?.trim()) {
+      throw new Error("CloverClient requires either accessToken or tokenProvider.");
+    }
+    const tokenProvider =
+      config.tokenProvider ?? (async () => config.accessToken!.trim());
+
     this.merchantId = config.merchantId;
     const base = config.sandbox
       ? "https://apisandbox.dev.clover.com"
@@ -39,10 +52,20 @@ export class CloverClient {
       baseURL: base,
       timeout: 15000,
       headers: {
-        Authorization: `Bearer ${config.accessToken}`,
         "Content-Type": "application/json",
       },
       paramsSerializer: serializeParams,
+    });
+
+    // Attach the bearer token per-request (not baked at construction) so a
+    // resolver-backed, rotated token is honored without rebuilding the client.
+    this.http.interceptors.request.use(async (cfg) => {
+      const token = (await tokenProvider())?.trim();
+      if (!token) {
+        throw new Error("tokenProvider returned an empty Clover access token.");
+      }
+      cfg.headers.set("Authorization", `Bearer ${token}`);
+      return cfg;
     });
 
     axiosRetry(this.http, {
@@ -124,9 +147,13 @@ export class CloverClient {
     return all;
   }
 
-  async post<T>(path: string, data?: unknown): Promise<T> {
+  async post<T>(
+    path: string,
+    data?: unknown,
+    config?: Parameters<AxiosInstance["post"]>[2]
+  ): Promise<T> {
     const res = await this.limiter.schedule(() =>
-      this.http.post<T>(path, data)
+      this.http.post<T>(path, data, config)
     );
     return res.data;
   }
