@@ -3,6 +3,7 @@ import { z } from "zod";
 import { CloverClient } from "../clover-client.js";
 import { tool } from "../tool-wrapper.js";
 import { parseDate, parseEndDate, resolvePeriod } from "../lib/date.js";
+import { requestConfirmation, consumeConfirmation } from "../lib/confirm.js";
 
 export function registerOrderTools(server: McpServer, clover: CloverClient) {
   tool(
@@ -185,16 +186,44 @@ export function registerOrderTools(server: McpServer, clover: CloverClient) {
       paymentId: z.string().regex(/^[A-Z0-9]+$/i, "paymentId must be alphanumeric").max(40),
       amountCents: z.number().int().positive().optional().describe("Partial refund amount in cents. Omit for full refund."),
       reason: z.string().max(500).optional(),
-      confirm: z.boolean().optional().default(false).describe("Must be true to apply changes"),
+      confirmationToken: z.string().optional().describe("Token from the prior confirmation step"),
     },
-    async ({ paymentId, amountCents, reason, confirm }) => {
-      if (!confirm) {
-        return { content: [{ type: "text", text: `DRY RUN: Would refund ${amountCents ? `${amountCents} cents` : "full amount"} for payment ${paymentId}. Set confirm=true to apply.` }] };
+    async ({ paymentId, amountCents, reason, confirmationToken }) => {
+      // Pre-flight duplicate guard (CodeRabbit, batch 4 — the CardPointe
+      // refund-residuals pattern): Clover v3 refunds carry no idempotency key,
+      // and the shared retry layer re-sends on network errors, so a refund
+      // whose response was dropped could otherwise be issued twice. Runs on
+      // BOTH calls, so a refund that lands between request and confirm is
+      // also caught.
+      const payment = await clover.get<any>(clover.v3(`/payments/${paymentId}?expand=refunds`));
+      const priorRefunds: any[] = payment?.refunds?.elements ?? [];
+      const duplicate = amountCents
+        ? priorRefunds.find((r) => r?.amount === amountCents)
+        : priorRefunds[0];
+      if (duplicate) {
+        throw new Error(
+          `Refund BLOCKED: payment ${paymentId} already has refund ${duplicate.id ?? "(id unknown)"} ` +
+          `for ${duplicate.amount ?? "?"} cents. Verify in the Clover dashboard before retrying — ` +
+          `if a second refund is genuinely intended, process it there.`
+        );
+      }
+      const gateArgs = { paymentId, amountCents, reason };
+      if (!confirmationToken) {
+        return requestConfirmation(clover.merchantId, "create_refund", gateArgs,
+          `Refund ${amountCents ? `$${(amountCents / 100).toFixed(2)}` : "the FULL amount"} on payment ${paymentId}${reason ? ` (reason: ${reason})` : ""}. This moves money and cannot be undone.`);
+      }
+      const gate = consumeConfirmation(clover.merchantId, "create_refund", gateArgs, confirmationToken);
+      if (!gate.ok) {
+        throw new Error(`Refund NOT executed: ${gate.reason}`);
       }
       const body: Record<string, unknown> = { payment: { id: paymentId } };
       if (amountCents) body.amount = amountCents;
       if (reason) body.reason = reason;
-      const data = await clover.post<any>(clover.v3("/refunds"), body);
+      // Money movement: never blind-retried. A network failure here surfaces
+      // as an error and the pre-flight guard arbitrates any retry.
+      const data = await clover.post<any>(clover.v3("/refunds"), body, {
+        "axios-retry": { retries: 0 },
+      });
       return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
     }
   );

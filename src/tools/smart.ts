@@ -3,6 +3,7 @@ import { z } from "zod";
 import { CloverClient } from "../clover-client.js";
 import { tool } from "../tool-wrapper.js";
 import { parseDate, resolvePeriod } from "../lib/date.js";
+import { requestConfirmation, consumeConfirmation } from "../lib/confirm.js";
 
 export function registerSmartTools(server: McpServer, clover: CloverClient) {
 
@@ -406,11 +407,22 @@ export function registerSmartTools(server: McpServer, clover: CloverClient) {
         quantity: z.number().positive(),
         reason: z.string().max(200).optional(),
       })).min(1),
-      confirm: z.boolean().optional().default(false),
+      confirmationToken: z.string().optional().describe("Token from the prior confirmation step"),
     },
-    async ({ items, confirm }) => {
-      if (!confirm) {
-        return { content: [{ type: "text", text: `DRY RUN: Would log waste for ${items.length} items. Set confirm=true to apply.` }] };
+    async ({ items, confirmationToken }) => {
+      const gateArgs = { items };
+      if (!confirmationToken) {
+        const preview = items
+          .slice(0, 10)
+          .map((i) => `${i.itemId}: -${i.quantity}${i.reason ? ` (${i.reason})` : ""}`)
+          .join("; ");
+        return requestConfirmation(clover.merchantId, "log_waste", gateArgs,
+          `Log waste for ${items.length} item(s) and reduce their stock accordingly. ` +
+          `Items: ${preview}${items.length > 10 ? "; …" : ""}`);
+      }
+      const gate = consumeConfirmation(clover.merchantId, "log_waste", gateArgs, confirmationToken);
+      if (!gate.ok) {
+        throw new Error(`Waste logging NOT executed: ${gate.reason}`);
       }
       const results = [];
       const failed: { itemId: string; error: string }[] = [];

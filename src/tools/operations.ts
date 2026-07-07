@@ -6,6 +6,7 @@ import { CloverClient } from "../clover-client.js";
 import { tool } from "../tool-wrapper.js";
 import { resolvePeriod, parseDate } from "../lib/date.js";
 import { collectSettled } from "../lib/settled.js";
+import { requestConfirmation, consumeConfirmation } from "../lib/confirm.js";
 
 const CLOVER_ID = z.string().regex(/^[A-Z0-9]+$/i, "must be alphanumeric").max(40);
 
@@ -68,33 +69,28 @@ export function registerOperationsTools(server: McpServer, clover: CloverClient)
         .describe("Percentage to change prices. Positive = increase, negative = decrease. e.g. 5 = +5%"),
       roundToNearest: z.number().positive().max(100).optional().default(0.05)
         .describe("Round prices to nearest value e.g. 0.05 for nickel rounding"),
-      confirm: z.boolean().optional().default(false).describe("Must be true to apply changes"),
+      confirmationToken: z.string().optional().describe("Token from the prior confirmation step"),
     },
-    async ({ categoryId, changePercent, roundToNearest, confirm }) => {
+    async ({ categoryId, changePercent, roundToNearest, confirmationToken }) => {
       const elements = await clover.getAll(clover.v3("/items"), {
         filter: `categories.id=${categoryId}`,
       });
 
-      if (!confirm) {
+      const gateArgs = { categoryId, changePercent, roundToNearest };
+      if (!confirmationToken) {
         const preview = elements.map((item: any) => {
           const oldPrice = item.price ?? 0;
           const rawNew = oldPrice * (1 + changePercent / 100);
           const roundedCents = Math.max(0, Math.round(rawNew / (roundToNearest * 100)) * (roundToNearest * 100));
-          return { name: item.name, oldPrice: `$${(oldPrice / 100).toFixed(2)}`, newPrice: `$${(roundedCents / 100).toFixed(2)}` };
+          return `${item.name}: $${(oldPrice / 100).toFixed(2)} → $${(roundedCents / 100).toFixed(2)}`;
         });
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              status: "DRY_RUN",
-              message: "Set confirm=true to apply these changes.",
-              categoryId,
-              changePercent,
-              itemsToUpdate: preview.length,
-              preview: preview.slice(0, 10),
-            }, null, 2),
-          }],
-        };
+        return requestConfirmation(clover.merchantId, "bulk_update_prices", gateArgs,
+          `Apply ${changePercent > 0 ? "+" : ""}${changePercent}% to ${preview.length} item(s) in category ${categoryId}. ` +
+          `Prices are recomputed from CURRENT values at execution. First changes: ${preview.slice(0, 10).join("; ")}`);
+      }
+      const gate = consumeConfirmation(clover.merchantId, "bulk_update_prices", gateArgs, confirmationToken);
+      if (!gate.ok) {
+        throw new Error(`Bulk price update NOT executed: ${gate.reason}`);
       }
 
       // F5 fix: allSettled — one failed write no longer aborts the report
@@ -140,9 +136,9 @@ export function registerOperationsTools(server: McpServer, clover: CloverClient)
       categoryId: CLOVER_ID.describe("Category to discount"),
       discountPercent: z.number().min(1).max(99).describe("Discount percentage e.g. 20 = 20% off"),
       restore: z.boolean().optional().default(false).describe("Set true to restore original prices saved from the last activation"),
-      confirm: z.boolean().optional().default(false).describe("Must be true to apply changes"),
+      confirmationToken: z.string().optional().describe("Token from the prior confirmation step"),
     },
-    async ({ categoryId, discountPercent, restore, confirm }) => {
+    async ({ categoryId, discountPercent, restore, confirmationToken }) => {
       const backupFile = join(process.env.RESERVATIONS_PATH ?? ".", `happyhour_${categoryId}.json`);
 
       const elements = await clover.getAll(clover.v3("/items"), {
@@ -155,8 +151,16 @@ export function registerOperationsTools(server: McpServer, clover: CloverClient)
         }
         const backup: Record<string, number> = JSON.parse(readFileSync(backupFile, "utf-8"));
 
-        if (!confirm) {
-          return { content: [{ type: "text", text: `DRY RUN: Would restore original prices for ${Object.keys(backup).length} items. Set confirm=true to apply.` }] };
+        // Restore does not use discountPercent; binding it would reject a retry
+        // that supplied a different dummy value. Bind only what determines the mutation.
+        const restoreGateArgs = { categoryId, restore };
+        if (!confirmationToken) {
+          return requestConfirmation(clover.merchantId, "set_happy_hour_prices", restoreGateArgs,
+            `Restore original prices for ${Object.keys(backup).length} item(s) in category ${categoryId} (end happy hour).`);
+        }
+        const restoreGate = consumeConfirmation(clover.merchantId, "set_happy_hour_prices", restoreGateArgs, confirmationToken);
+        if (!restoreGate.ok) {
+          throw new Error(`Restore NOT executed: ${restoreGate.reason}`);
         }
 
         // F5 fix: allSettled + only delete the backup if EVERY restore
@@ -201,8 +205,14 @@ export function registerOperationsTools(server: McpServer, clover: CloverClient)
         }, null, 2) }] };
       }
 
-      if (!confirm) {
-        return { content: [{ type: "text", text: `DRY RUN: Would apply ${discountPercent}% happy hour discount to ${elements.length} items. Set confirm=true to apply.` }] };
+      const gateArgs = { categoryId, discountPercent, restore };
+      if (!confirmationToken) {
+        return requestConfirmation(clover.merchantId, "set_happy_hour_prices", gateArgs,
+          `Apply ${discountPercent}% happy-hour discount to ${elements.length} item(s) in category ${categoryId}. Original prices are backed up for restore.`);
+      }
+      const gate = consumeConfirmation(clover.merchantId, "set_happy_hour_prices", gateArgs, confirmationToken);
+      if (!gate.ok) {
+        throw new Error(`Happy hour NOT executed: ${gate.reason}`);
       }
 
       const backup: Record<string, number> = {};
